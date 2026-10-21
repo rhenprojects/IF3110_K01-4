@@ -103,9 +103,7 @@ func (h *UserHandler) GetProfile(c *fiber.Ctx) error {
 	})
 }
 
-// RegisterRoutes mendaftarkan rute khusus user ke router Fiber
 func (h *UserHandler) RegisterRoutes(router fiber.Router) {
-	// Bisa dikelompokkan lagi jika ingin prefix /users
 	usersGroup := router.Group("/users")
 
 	usersGroup.Post("/register", h.Register)

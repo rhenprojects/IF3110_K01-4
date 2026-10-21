@@ -21,7 +21,6 @@ func SetupRoutes(app *fiber.App, db *gorm.DB) {
 		})
 	})
 
-	// Test connection endpoint to receive and respond with JSON
 	api.Post("/test", func(c *fiber.Ctx) error {
 		var payload map[string]interface{}
 		if err := c.BodyParser(&payload); err != nil {
