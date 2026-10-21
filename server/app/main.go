@@ -2,15 +2,46 @@ package main
 
 import (
 	"log"
+	"os"
+	"web_backend/internal/api"
+	"web_backend/internal/models"
 
 	fiber "github.com/gofiber/fiber/v2"
+	fiberLogger "github.com/gofiber/fiber/v2/middleware/logger"
+	fiberRecover "github.com/gofiber/fiber/v2/middleware/recover"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
 )
 
 func main() {
+	var db *gorm.DB
+	var err error
+
+	dsn := os.Getenv("DB_DSN")
+	if dsn == "" {
+		dsn = "host=localhost user=postgres password=postgres dbname=web_backend_db port=5432 sslmode=disable"
+	}
+
+	db, err = gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	if err != nil {
+		log.Printf("[WARN] Gagal terhubung ke database: %v (Menjalankan server tanpa database)", err)
+		db = nil
+	} else {
+		if err := db.AutoMigrate(&models.User{}); err != nil {
+			log.Printf("[WARN] Gagal melakukan migrasi database: %v", err)
+		}
+	}
+
 	app := fiber.New()
+	app.Use(fiberLogger.New())
+	app.Use(fiberRecover.New())
+	api.SetupRoutes(app, db)
 
-	api := app.Group("/api/v1")
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "9000"
+	}
 
-	log.Println("Server starting on http://localhost:8080")
-	log.Fatal(app.Listen(":8080"))
+	log.Printf("Server berhasil dijalankan pada http://localhost:%s", port)
+	log.Fatal(app.Listen(":" + port))
 }
