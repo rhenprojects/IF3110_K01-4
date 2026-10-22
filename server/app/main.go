@@ -5,6 +5,7 @@ import (
 	"os"
 	"web_backend/internal/api"
 	"web_backend/internal/models"
+	userhandler "web_backend/internal/user_handler"
 
 	fiber "github.com/gofiber/fiber/v2"
 	fiberLogger "github.com/gofiber/fiber/v2/middleware/logger"
@@ -31,6 +32,13 @@ func main() {
 			log.Printf("[WARN] Gagal melakukan migrasi database: %v", err)
 		}
 	}
+
+	hashKey := []byte(os.Getenv("SESSION_HASH_KEY"))
+	blockKey := []byte(os.Getenv("SESSION_BLOCK_KEY"))
+	if len(hashKey) == 0 || len(blockKey) == 0 {
+		log.Println("[WARN] SESSION_HASH_KEY atau SESSION_BLOCK_KEY belum diset. Cookie session memakai key acak dan tidak valid setelah server restart")
+	}
+	userhandler.InitSession(hashKey, blockKey)
 
 	app := fiber.New()
 	app.Use(fiberLogger.New())
