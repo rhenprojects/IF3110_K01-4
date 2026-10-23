@@ -32,6 +32,13 @@ func main() {
 		if err := db.AutoMigrate(&models.User{}, &models.DBConnection{}); err != nil {
 			log.Printf("[WARN] Gagal melakukan migrasi database: %v", err)
 		}
+		created, err := userhandler.EnsureAdmin(db, os.Getenv("ADMIN_USERNAME"), os.Getenv("ADMIN_PASSWORD"))
+		switch {
+		case err != nil:
+			log.Printf("[WARN] Gagal menyiapkan Platform Admin: %v", err)
+		case created:
+			log.Printf("Platform Admin %q dibuat dari ADMIN_USERNAME", os.Getenv("ADMIN_USERNAME"))
+		}
 	}
 
 	var encKey []byte
