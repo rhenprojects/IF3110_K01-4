@@ -32,7 +32,7 @@ func NewCipher(key []byte) (*Cipher, error) {
 	return &Cipher{aead: aead}, nil
 }
 
-func ParseKey(encoded string) (	) {
+func ParseKey(encoded string) ([]byte, error) {
 	key, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
 		return nil, fmt.Errorf("encryption key is not valid base64: %w", err)
