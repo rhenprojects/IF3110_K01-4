@@ -5,6 +5,7 @@ import (
 	"os"
 	"web_backend/internal/api"
 	"web_backend/internal/models"
+	"web_backend/internal/targetdb"
 	userhandler "web_backend/internal/user_handler"
 
 	fiber "github.com/gofiber/fiber/v2"
@@ -28,9 +29,32 @@ func main() {
 		log.Printf("[WARN] Gagal terhubung ke database: %v (Menjalankan server tanpa database)", err)
 		db = nil
 	} else {
-		if err := db.AutoMigrate(&models.User{}); err != nil {
+		if err := db.AutoMigrate(&models.User{}, &models.DBConnection{}); err != nil {
 			log.Printf("[WARN] Gagal melakukan migrasi database: %v", err)
 		}
+	}
+
+	var encKey []byte
+	if encoded := os.Getenv("DB_ENC_KEY"); encoded != "" {
+		if encKey, err = targetdb.ParseKey(encoded); err != nil {
+			log.Fatalf("DB_ENC_KEY tidak valid: %v", err)
+		}
+	} else {
+		log.Println("[WARN] DB_ENC_KEY belum diset. Kredensial database target memakai key acak dan tidak bisa didekripsi setelah server restart")
+		encKey = targetdb.RandomKey()
+	}
+	connCipher, err := targetdb.NewCipher(encKey)
+	if err != nil {
+		log.Fatalf("Gagal membuat cipher: %v", err)
+	}
+	var connService *targetdb.Service
+	if db != nil {
+		connService = targetdb.NewService(db, connCipher, targetdb.NewPoolManager())
+	}
+
+	devAuth := os.Getenv("DEV_AUTH") == "true"
+	if devAuth {
+		log.Println("[WARN] DEV_AUTH aktif: identitas user diambil dari header X-Debug-User. Jangan dipakai di production")
 	}
 
 	hashKey := []byte(os.Getenv("SESSION_HASH_KEY"))
@@ -43,7 +67,7 @@ func main() {
 	app := fiber.New()
 	app.Use(fiberLogger.New())
 	app.Use(fiberRecover.New())
-	api.SetupRoutes(app, db)
+	api.SetupRoutes(app, db, connService, devAuth)
 
 	port := os.Getenv("PORT")
 	if port == "" {

@@ -1,13 +1,15 @@
 package api
 
 import (
+	"web_backend/internal/authctx"
+	"web_backend/internal/targetdb"
 	userhandler "web_backend/internal/user_handler"
 
 	"github.com/gofiber/fiber/v2"
 	"gorm.io/gorm"
 )
 
-func SetupRoutes(app *fiber.App, db *gorm.DB) {
+func SetupRoutes(app *fiber.App, db *gorm.DB, connService *targetdb.Service, devAuth bool) {
 	api := app.Group("/api/v1")
 
 	api.Get("/health", func(c *fiber.Ctx) error {
@@ -57,4 +59,7 @@ func SetupRoutes(app *fiber.App, db *gorm.DB) {
 
 	userHandler := userhandler.NewUserHandler(db)
 	userHandler.RegisterRoutes(api)
+
+	protected := api.Group("", authctx.DevAuth(devAuth))
+	targetdb.NewHandler(connService).RegisterRoutes(protected)
 }
