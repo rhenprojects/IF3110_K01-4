@@ -57,9 +57,10 @@ func SetupRoutes(app *fiber.App, db *gorm.DB, connService *targetdb.Service, dev
 		})
 	})
 
-	userHandler := userhandler.NewUserHandler(db)
-	userHandler.RegisterRoutes(api)
-
 	protected := api.Group("", authctx.DevAuth(devAuth))
+
+	userHandler := userhandler.NewUserHandler(db)
+	userHandler.RegisterRoutes(protected)
+
 	targetdb.NewHandler(connService).RegisterRoutes(protected)
 }
