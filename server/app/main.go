@@ -29,7 +29,15 @@ func main() {
 		log.Printf("[WARN] Gagal terhubung ke database: %v (Menjalankan server tanpa database)", err)
 		db = nil
 	} else {
-		if err := db.AutoMigrate(&models.User{}, &models.DBConnection{}); err != nil {
+		if err := db.AutoMigrate(
+			&models.User{},
+			&models.Group{},
+			&models.GroupMember{},
+			&models.Session{},
+			&models.DBConnection{},
+			&models.GroupDatabaseAccess{},
+			&models.Migration{},
+		); err != nil {
 			log.Printf("[WARN] Gagal melakukan migrasi database: %v", err)
 		}
 		created, err := userhandler.EnsureAdmin(db, os.Getenv("ADMIN_USERNAME"), os.Getenv("ADMIN_PASSWORD"))
