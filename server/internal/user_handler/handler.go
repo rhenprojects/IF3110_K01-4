@@ -116,6 +116,9 @@ func (h *UserHandler) UpdateUser(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return httpx.Error(c, fiber.StatusBadRequest, "Invalid request body")
 	}
+	if c.Params("id") == authctx.UserID(c) && req.IsAdmin != nil && !*req.IsAdmin {
+		return httpx.Error(c, fiber.StatusConflict, "cannot remove your own admin status")
+	}
 	user, err := UpdateUser(h.DB, c.Params("id"), req)
 	if err != nil {
 		return writeUserError(c, err)

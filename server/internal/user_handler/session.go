@@ -134,6 +134,7 @@ func (s *SessionService) Create(c *fiber.Ctx, userID string) (*models.Session, s
 	if err := s.cookie.set(c, token, session.AbsoluteExpiresAt); err != nil {
 		return nil, "", err
 	}
+	s.cookie.setCSRF(c, csrfToken, session.AbsoluteExpiresAt)
 	return &session, csrfToken, nil
 }
 
@@ -188,6 +189,7 @@ func (s *SessionService) Validate(c *fiber.Ctx) (*models.Session, error) {
 	if err := s.cookie.set(c, newToken, session.AbsoluteExpiresAt); err != nil {
 		return nil, err
 	}
+	s.cookie.setCSRF(c, session.CSRFToken, session.AbsoluteExpiresAt)
 
 	return &session, nil
 }

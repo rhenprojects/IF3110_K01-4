@@ -162,6 +162,11 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 	if res.RowsAffected == 0 {
 		return ErrNotFound
 	}
+	if err := s.db.WithContext(ctx).
+		Where("connection_id = ?", id).
+		Delete(&models.GroupDatabaseAccess{}).Error; err != nil {
+		return err
+	}
 	s.pools.Invalidate(id)
 	return nil
 }
