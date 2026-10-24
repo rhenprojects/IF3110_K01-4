@@ -1,11 +1,10 @@
 import { http, HttpResponse } from "msw";
 import { load, publicUser, sessionUserId, setSession } from "./db";
 
-//[error] bentuk error sama seperti backend: { error, field? }
+//[error] format error: { error, field? }
 export const err = (status: number, error: string, field?: string) =>
   HttpResponse.json(field ? { error, field } : { error }, { status });
 
-//[auth] user dari session mock, null jika belum login
 export function currentUser() {
   const id = sessionUserId();
   return load().users.find((u) => u.id === id) ?? null;
@@ -19,7 +18,6 @@ export const authHandlers = [
     setSession(u.id);
     return HttpResponse.json({ message: "Login successful", user: publicUser(u) });
   }),
-  //[usulan] logout belum ada di backend
   http.post("/api/v1/users/logout", () => {
     setSession(null);
     return new HttpResponse(null, { status: 204 });

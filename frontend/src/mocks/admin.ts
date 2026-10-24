@@ -9,7 +9,6 @@ const now = () => new Date().toISOString();
 const uid = () => crypto.randomUUID();
 const notFound = (what: string) => err(404, `${what} not found`);
 
-//[guard] 401 jika belum login, 403 jika bukan admin
 function deny() {
   const u = currentUser();
   if (!u) return err(401, "Unauthorized");
@@ -19,7 +18,6 @@ function deny() {
 
 type Ctx<T> = { s: ReturnType<typeof load>; id: string; body: T };
 
-//[wrap] cek admin, load store, jalankan handler, simpan store
 function admin<T extends object = object>(fn: (c: Ctx<T>) => Response) {
   return async ({ params, request }: { params: Record<string, unknown>; request: Request }) => {
     const d = deny();
@@ -33,17 +31,18 @@ function admin<T extends object = object>(fn: (c: Ctx<T>) => Response) {
   };
 }
 
-//[validasi] aturan sama seperti backend (user_handler/user.go)
+//[validasi] aturan user: lihat docs/api-contract.md bagian Users
 function checkUser(b: Partial<CreateUserInput>, requireAll: boolean): Response | null {
   if (requireAll && !/^[a-zA-Z0-9_.-]{3,50}$/.test(b.username ?? ""))
     return err(400, "3-50 characters: letters, digits, '_', '.', '-'", "username");
   if ((b.name ?? "").length > 100) return err(400, "max 100 characters", "name");
   if ((requireAll || b.password !== undefined) && (b.password ?? "").length < 8)
     return err(400, "at least 8 characters", "password");
+  if (new TextEncoder().encode(b.password ?? "").length > 72) return err(400, "at most 72 bytes", "password");
   return null;
 }
 
-//[validasi] aturan sama seperti backend (targetdb/service.go)
+//[validasi] aturan koneksi: lihat docs/api-contract.md bagian Koneksi database
 function checkConn(b: Partial<ConnectionInput>, requirePassword: boolean): Response | null {
   const name = (b.name ?? "").trim(), host = (b.host ?? "").trim();
   const port = b.port || 5432;
@@ -66,7 +65,6 @@ function testResult(host: string) {
 }
 
 export const adminHandlers = [
-  //[user] get/post sudah ada di backend (post saja), sisanya usulan
   http.get(`${P}/users`, admin(({ s }) => HttpResponse.json({ users: s.users.map(publicUser) }))),
   http.post(`${P}/users`, admin<CreateUserInput>(({ s, body }) => {
     const bad = checkUser(body, true);
@@ -98,7 +96,6 @@ export const adminHandlers = [
     return new HttpResponse(null, { status: 204 });
   })),
 
-  //[group] semua usulan (belum ada di backend)
   http.get(`${P}/groups`, admin(({ s }) => HttpResponse.json({ groups: s.groups }))),
   http.post(`${P}/groups`, admin<GroupInput>(({ s, body }) => {
     const name = (body.name ?? "").trim();
@@ -135,7 +132,6 @@ export const adminHandlers = [
     return HttpResponse.json(g);
   })),
 
-  //[akses] level akses group per koneksi database
   http.get(`${P}/groups/:id/access`, admin(({ s, id }) =>
     s.groups.some((g) => g.id === id) ? HttpResponse.json({ access: s.access[id] ?? [] }) : notFound("group"))),
   http.put(`${P}/groups/:id/access`, admin<{ access?: AccessEntry[] }>(({ s, id, body }) => {
@@ -149,7 +145,6 @@ export const adminHandlers = [
     return HttpResponse.json({ access: list });
   })),
 
-  //[koneksi] sesuai backend (targetdb/handler.go): put untuk update, list dibungkus
   http.get(`${P}/connections`, admin(({ s }) => HttpResponse.json({ connections: s.connections }))),
   http.post(`${P}/connections/test`, admin<ConnectionInput>(({ body }) => checkConn(body, true) ?? testResult(body.host.trim()))),
   http.get(`${P}/connections/:id`, admin(({ s, id }) => {

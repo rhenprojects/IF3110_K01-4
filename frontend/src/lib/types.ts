@@ -1,4 +1,4 @@
-//[types] bentuk data sesuai docs/api-contract.md (snake_case seperti backend)
+//[types] bentuk data sesuai docs/api-contract.md
 
 export type User = {
   id: string;
