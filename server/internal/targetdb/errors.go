@@ -45,6 +45,10 @@ func classifyConnError(err error) error {
 	return fmt.Errorf("%w: %w", ErrUnreachable, err)
 }
 
+func ClassifyConnError(err error) error {
+	return classifyConnError(err)
+}
+
 func IsConnError(err error) bool {
 	return errors.Is(err, ErrAuthFailed) || errors.Is(err, ErrDatabaseNotFound) ||
 		errors.Is(err, ErrTimeout) || errors.Is(err, ErrUnreachable)
