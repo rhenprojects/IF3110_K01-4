@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { useAuth } from "../../features/auth/auth";
+import { useAuth } from "../auth/auth";
 import { useDatabases } from "../../features/databases/hooks";
 import { EmptyState, Loading, PageHeader, Table, td } from "../../components/ui";
 import { LevelBadge, StateError } from "./shared";

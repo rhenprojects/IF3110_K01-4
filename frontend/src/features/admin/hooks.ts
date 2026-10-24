@@ -1,62 +1,62 @@
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../lib/api";
-import type { DatabaseItem, Migration, MigrationInput, RowsResponse, SchemaResponse } from "../../lib/types";
+import type {
+  AccessEntry, Connection, ConnectionInput, CreateUserInput, Group, GroupInput, TestResult, UpdateUserInput, User,
+} from "../../lib/types";
 
-//[query] semua key diawali "db" supaya ikut dibuang saat logout / 401 (lihat dropCache di auth.tsx).
-//[query] retry dimatikan: 403/404/502 bukan error sementara, user cukup menekan "Coba lagi".
-const base = (id: string) => `/databases/${encodeURIComponent(id)}`;
-const enc = encodeURIComponent;
+const json = (b: unknown) => JSON.stringify(b);
 
-export const useDatabases = () =>
-  useQuery({
-    queryKey: ["db", "list"], retry: false,
-    queryFn: () => api<{ databases: DatabaseItem[] }>("/databases").then((r) => r.databases),
-  });
-
-export const useDatabase = (id: string) =>
-  useQuery({ queryKey: ["db", id, "info"], retry: false, queryFn: () => api<DatabaseItem>(base(id)) });
-
-export const useSchema = (id: string) =>
-  useQuery({ queryKey: ["db", id, "schema"], retry: false, queryFn: () => api<SchemaResponse>(`${base(id)}/schema`) });
-
-export const useRows = (id: string, schema: string, table: string, limit: number, offset: number) =>
-  useQuery({
-    queryKey: ["db", id, "rows", schema, table, limit, offset],
-    retry: false,
-    enabled: !!schema && !!table,
-    placeholderData: keepPreviousData, //[ux] halaman sebelumnya tetap tampil saat memuat halaman berikutnya
-    queryFn: () => api<RowsResponse>(`${base(id)}/tables/${enc(schema)}/${enc(table)}/rows?limit=${limit}&offset=${offset}`),
-  });
-
-export const useMigrations = (id: string) =>
-  useQuery({
-    queryKey: ["db", id, "migrations"], retry: false,
-    queryFn: () => api<{ migrations: Migration[] }>(`${base(id)}/migrations`).then((r) => r.migrations),
-  });
-
-export const useMigration = (id: string, mid?: string) =>
-  useQuery({
-    queryKey: ["db", id, "migrations", mid], retry: false, enabled: !!mid,
-    queryFn: () => api<Migration>(`${base(id)}/migrations/${enc(mid!)}`),
-  });
-
-export const useSaveMigration = (id: string) => {
+//[query] semua mutasi admin meng-invalidate cache "admin" agar tabel segar
+function useMut<V, R>(fn: (v: V) => Promise<R>) {
   const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ mid, input }: { mid?: string; input: MigrationInput }) =>
-      mid
-        ? api<Migration>(`${base(id)}/migrations/${enc(mid)}`, { method: "PUT", body: JSON.stringify(input) })
-        : api<Migration>(`${base(id)}/migrations`, { method: "POST", body: JSON.stringify(input) }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["db", id, "migrations"] }),
-  });
-};
+  return useMutation({ mutationFn: fn, onSuccess: () => qc.invalidateQueries({ queryKey: ["admin"] }) });
+}
 
-//[execute] berhasil atau gagal (rollback) sama-sama 200; yang membedakan field status.
-//[execute] seluruh cache database ini di-invalidate karena schema dan isi tabel bisa berubah.
-export const useExecuteMigration = (id: string) => {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (mid: string) => api<Migration>(`${base(id)}/migrations/${enc(mid)}/execute`, { method: "POST" }),
-    onSettled: () => qc.invalidateQueries({ queryKey: ["db", id] }),
+export const useUsers = () =>
+  useQuery({ queryKey: ["admin", "users"], queryFn: () => api<{ users: User[] }>("/admin/users").then((r) => r.users) });
+export const useCreateUser = () =>
+  useMut((v: CreateUserInput) => api<User>("/admin/users", { method: "POST", body: json(v) }));
+export const useUpdateUser = () =>
+  useMut(({ id, ...v }: UpdateUserInput & { id: string }) => api<User>(`/admin/users/${id}`, { method: "PUT", body: json(v) }));
+export const useDeleteUser = () => useMut((id: string) => api<void>(`/admin/users/${id}`, { method: "DELETE" }));
+
+export const useGroups = () =>
+  useQuery({ queryKey: ["admin", "groups"], queryFn: () => api<{ groups: Group[] }>("/admin/groups").then((r) => r.groups) });
+export const useCreateGroup = () =>
+  useMut((v: GroupInput) => api<Group>("/admin/groups", { method: "POST", body: json(v) }));
+export const useUpdateGroup = () =>
+  useMut(({ id, ...v }: GroupInput & { id: string }) => api<Group>(`/admin/groups/${id}`, { method: "PUT", body: json(v) }));
+export const useDeleteGroup = () => useMut((id: string) => api<void>(`/admin/groups/${id}`, { method: "DELETE" }));
+export const useSetMembers = () =>
+  useMut(({ id, user_ids }: { id: string; user_ids: string[] }) =>
+    api<Group>(`/admin/groups/${id}/members`, { method: "PUT", body: json({ user_ids }) }));
+
+export const useGroupAccess = (id: string) =>
+  useQuery({
+    queryKey: ["admin", "access", id],
+    queryFn: () => api<{ access: AccessEntry[] }>(`/admin/groups/${id}/access`).then((r) => r.access),
   });
-};
+export const useSetAccess = () =>
+  useMut(({ id, access }: { id: string; access: AccessEntry[] }) =>
+    api<{ access: AccessEntry[] }>(`/admin/groups/${id}/access`, { method: "PUT", body: json({ access }) }));
+
+export const useConnections = () =>
+  useQuery({
+    queryKey: ["admin", "connections"],
+    queryFn: () => api<{ connections: Connection[] }>("/admin/connections").then((r) => r.connections),
+  });
+export const useCreateConnection = () =>
+  useMut((v: ConnectionInput) => api<Connection>("/admin/connections", { method: "POST", body: json(v) }));
+export const useUpdateConnection = () =>
+  useMut(({ id, ...v }: ConnectionInput & { id: string }) =>
+    api<Connection>(`/admin/connections/${id}`, { method: "PUT", body: json(v) }));
+export const useDeleteConnection = () => useMut((id: string) => api<void>(`/admin/connections/${id}`, { method: "DELETE" }));
+
+//[test] koneksi belum disimpan: kirim form; sudah disimpan & password kosong: test by id
+export const useTestConnection = () =>
+  useMutation({
+    mutationFn: ({ id, input }: { id?: string; input: ConnectionInput }) =>
+      id && !input.password
+        ? api<TestResult>(`/admin/connections/${id}/test`, { method: "POST" })
+        : api<TestResult>("/admin/connections/test", { method: "POST", body: json(input) }),
+  });
