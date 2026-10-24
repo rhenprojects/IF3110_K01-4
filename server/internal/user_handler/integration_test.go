@@ -186,6 +186,33 @@ func TestIntegrationSessionRotationAndGrace(t *testing.T) {
 	}
 }
 
+func TestIntegrationSessionGraceExpires(t *testing.T) {
+	app, db := setup(t)
+	user, err := userhandler.CreateUser(db, models.CreateUserRequest{Username: "alice", Password: "alice-password"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, cookies, _ := login(t, app, "alice", "alice-password")
+	oldCookie := cookies[0].Value
+
+	first := call(t, app, "GET", "/users/profile", nil, nil, cookies)
+	if first.Status != fiber.StatusOK {
+		t.Fatalf("profile: status %d, body %s", first.Status, first.Raw)
+	}
+
+	if err := db.Model(&models.Session{}).
+		Where("user_id = ?", user.ID).
+		Update("prev_valid_until", time.Now().Add(-time.Second)).Error; err != nil {
+		t.Fatalf("expire grace: %v", err)
+	}
+
+	expired := call(t, app, "GET", "/users/profile", nil, nil, []*http.Cookie{{Name: "session", Value: oldCookie}})
+	if expired.Status != fiber.StatusUnauthorized {
+		t.Errorf("old token after grace: status %d, want 401", expired.Status)
+	}
+}
+
 func TestIntegrationSessionTimeout(t *testing.T) {
 	app, db := setup(t)
 	user, err := userhandler.CreateUser(db, models.CreateUserRequest{Username: "alice", Password: "alice-password"})
