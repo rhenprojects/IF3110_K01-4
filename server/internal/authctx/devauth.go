@@ -4,7 +4,6 @@ import (
 	"github.com/gofiber/fiber/v2"
 )
 
-
 func DevAuth(enabled bool) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		if !enabled {

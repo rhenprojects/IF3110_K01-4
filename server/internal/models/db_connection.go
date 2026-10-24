@@ -10,7 +10,7 @@ type DBConnection struct {
 	ID          string         `json:"id" gorm:"type:uuid;primaryKey;default:gen_random_uuid()"`
 	Name        string         `json:"name" gorm:"column:name;type:varchar(100);not null;index:idx_db_connections_name,unique,where:deleted_at IS NULL"`
 	Host        string         `json:"host" gorm:"column:host;type:varchar(255);not null"`
-	Port        int            `json:"port" gorm:"column:port;not null;default:5432"`
+	Port        int            `json:"port" gorm:"column:port;type:bigint;not null;default:5432"`
 	DBName      string         `json:"db_name" gorm:"column:db_name;type:varchar(100);not null"`
 	Username    string         `json:"username" gorm:"column:username;type:varchar(100);not null"`
 	PasswordEnc []byte         `json:"-" gorm:"column:password_enc;type:bytea;not null"`

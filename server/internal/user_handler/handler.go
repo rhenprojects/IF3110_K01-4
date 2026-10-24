@@ -3,8 +3,8 @@ package userhandler
 import (
 	"errors"
 	"log"
-	"time"
 	"web_backend/internal/authctx"
+	"web_backend/internal/httpx"
 	"web_backend/internal/models"
 
 	"github.com/gofiber/fiber/v2"
@@ -19,87 +19,157 @@ func NewUserHandler(db *gorm.DB) *UserHandler {
 	return &UserHandler{DB: db}
 }
 
+func (h *UserHandler) requireDB(c *fiber.Ctx) error {
+	if h.DB == nil {
+		return httpx.Error(c, fiber.StatusServiceUnavailable, "Database is not connected")
+	}
+	return c.Next()
+}
+
 // CreateUser hanya untuk Platform Admin; tidak ada registrasi publik.
 func (h *UserHandler) CreateUser(c *fiber.Ctx) error {
-	if h.DB == nil {
-		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "Database is not connected"})
-	}
-
 	var req models.CreateUserRequest
 	if err := c.BodyParser(&req); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body"})
+		return httpx.Error(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
 	user, err := CreateUser(h.DB, req)
 	if err != nil {
-		var verr *ValidationError
-		switch {
-		case errors.As(err, &verr):
-			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": verr.Message, "field": verr.Field})
-		case errors.Is(err, ErrDuplicateUsername):
-			return c.Status(fiber.StatusConflict).JSON(fiber.Map{"error": ErrDuplicateUsername.Error()})
-		}
-		log.Printf("[user] create user failed: %v", err)
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Internal server error"})
+		return writeUserError(c, err)
 	}
 
 	return c.Status(fiber.StatusCreated).JSON(user)
 }
 
 func (h *UserHandler) Login(c *fiber.Ctx) error {
-	if h.DB == nil {
-		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "Database is not connected"})
-	}
-
 	var req models.LoginRequest
 	if err := c.BodyParser(&req); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body"})
+		return httpx.Error(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
 	var user models.User
 	if err := h.DB.Where("username = ?", req.Username).First(&user).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		log.Printf("[user] login lookup failed: %v", err)
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Internal server error"})
+		return httpx.Error(c, fiber.StatusInternalServerError, "Internal server error")
 	}
 	if !CheckPassword(user.Password, req.Password) {
-		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid username or password"})
+		return httpx.Error(c, fiber.StatusUnauthorized, "Invalid username or password")
 	}
 
-	if err := Session.SetSessionCookie(c, user.ID, 24*time.Hour); err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to create session"})
+	session, csrfToken, err := Session.Create(c, user.ID)
+	if err != nil {
+		log.Printf("[user] create session failed: %v", err)
+		return httpx.Error(c, fiber.StatusInternalServerError, "Failed to create session")
 	}
 
-	return c.JSON(fiber.Map{
-		"message": "Login successful",
-		"user":    user,
+	return c.JSON(models.LoginResponse{
+		Message:   "Login successful",
+		User:      user,
+		CSRFToken: csrfToken,
+		ExpiresAt: session.AbsoluteExpiresAt,
 	})
 }
 
+func (h *UserHandler) Logout(c *fiber.Ctx) error {
+	if err := Session.Revoke(c); err != nil {
+		log.Printf("[user] logout failed: %v", err)
+		return httpx.Error(c, fiber.StatusInternalServerError, "Failed to logout")
+	}
+	return c.SendStatus(fiber.StatusNoContent)
+}
+
+func (h *UserHandler) GetCSRFToken(c *fiber.Ctx) error {
+	session := SessionFrom(c)
+	if session == nil {
+		return httpx.Error(c, fiber.StatusUnauthorized, "Unauthorized")
+	}
+	return c.JSON(models.CSRFResponse{CSRFToken: session.CSRFToken})
+}
+
 func (h *UserHandler) GetProfile(c *fiber.Ctx) error {
-	if h.DB == nil {
-		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "Database is not connected"})
-	}
-
-	userID, err := Session.GetSessionUserID(c)
+	user, err := GetUser(h.DB, authctx.UserID(c))
 	if err != nil {
-		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Unauthorized"})
+		return writeUserError(c, err)
 	}
-
-	var user models.User
-	if err := h.DB.First(&user, "id = ?", userID).Error; err != nil {
-		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "User not found"})
-	}
-
 	return c.JSON(user)
 }
 
-// RegisterRoutes: router harus sudah melewati middleware auth (mengisi authctx)
-// agar endpoint admin bisa memeriksa hak akses.
-func (h *UserHandler) RegisterRoutes(router fiber.Router) {
-	usersGroup := router.Group("/users")
-	usersGroup.Post("/login", h.Login)
-	usersGroup.Get("/profile", h.GetProfile)
+func (h *UserHandler) ListUsers(c *fiber.Ctx) error {
+	var users []models.User
+	if err := h.DB.Order("username").Find(&users).Error; err != nil {
+		log.Printf("[user] list failed: %v", err)
+		return httpx.Error(c, fiber.StatusInternalServerError, "Internal server error")
+	}
+	return c.JSON(models.UserListResponse{Users: users})
+}
 
-	adminGroup := router.Group("/admin/users", authctx.RequireAdmin)
-	adminGroup.Post("/", h.CreateUser)
+func (h *UserHandler) GetUserByID(c *fiber.Ctx) error {
+	user, err := GetUser(h.DB, c.Params("id"))
+	if err != nil {
+		return writeUserError(c, err)
+	}
+	return c.JSON(user)
+}
+
+func (h *UserHandler) UpdateUser(c *fiber.Ctx) error {
+	var req models.UpdateUserRequest
+	if err := c.BodyParser(&req); err != nil {
+		return httpx.Error(c, fiber.StatusBadRequest, "Invalid request body")
+	}
+	user, err := UpdateUser(h.DB, c.Params("id"), req)
+	if err != nil {
+		return writeUserError(c, err)
+	}
+	return c.JSON(user)
+}
+
+func (h *UserHandler) DeleteUser(c *fiber.Ctx) error {
+	if err := DeleteUser(h.DB, c.Params("id"), authctx.UserID(c)); err != nil {
+		return writeUserError(c, err)
+	}
+	return c.SendStatus(fiber.StatusNoContent)
+}
+
+func writeUserError(c *fiber.Ctx, err error) error {
+	var verr *ValidationError
+	switch {
+	case errors.As(err, &verr):
+		return httpx.ValidationError(c, verr.Field, verr.Message)
+	case errors.Is(err, ErrDuplicateUsername):
+		return httpx.Error(c, fiber.StatusConflict, ErrDuplicateUsername.Error())
+	case errors.Is(err, ErrUserNotFound):
+		return httpx.Error(c, fiber.StatusNotFound, ErrUserNotFound.Error())
+	case errors.Is(err, ErrLastAdmin):
+		return httpx.Error(c, fiber.StatusConflict, ErrLastAdmin.Error())
+	case errors.Is(err, ErrCannotDeleteSelf):
+		return httpx.Error(c, fiber.StatusConflict, ErrCannotDeleteSelf.Error())
+	}
+	log.Printf("[user] internal error: %v", err)
+	return httpx.Error(c, fiber.StatusInternalServerError, "Internal server error")
+}
+
+// RegisterRoutes mendaftarkan route publik dan route yang sudah dilindungi.
+// Middleware diberikan sebagai argumen agar tidak berlaku ke route login.
+func (h *UserHandler) RegisterRoutes(public, protected fiber.Router, middleware ...fiber.Handler) {
+	usersPublic := public.Group("/users")
+	usersPublic.Post("/login", h.requireDB, h.Login)
+
+	protectedMiddleware := func(extra ...fiber.Handler) []fiber.Handler {
+		all := make([]fiber.Handler, 0, len(middleware)+len(extra))
+		all = append(all, middleware...)
+		all = append(all, extra...)
+		return all
+	}
+
+	users := protected.Group("/users", protectedMiddleware(h.requireDB)...)
+	users.Get("/profile", h.GetProfile)
+	users.Get("/csrf", h.GetCSRFToken)
+	users.Post("/logout", h.Logout)
+
+	admin := protected.Group("/admin/users", protectedMiddleware(h.requireDB, authctx.RequireAdmin)...)
+	admin.Post("/", h.CreateUser)
+	admin.Get("/", h.ListUsers)
+	admin.Get("/:id", h.GetUserByID)
+	admin.Put("/:id", h.UpdateUser)
+	admin.Delete("/:id", h.DeleteUser)
 }

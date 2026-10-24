@@ -8,6 +8,7 @@ import (
 	"sync"
 	"web_backend/internal/models"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
@@ -120,4 +121,109 @@ func EnsureAdmin(db *gorm.DB, username, password string) (bool, error) {
 		return false, err
 	}
 	return true, nil
+}
+
+var (
+	ErrUserNotFound     = errors.New("user not found")
+	ErrLastAdmin        = errors.New("cannot remove the last platform admin")
+	ErrCannotDeleteSelf = errors.New("cannot delete your own account")
+)
+
+func GetUser(db *gorm.DB, id string) (*models.User, error) {
+	if _, err := uuid.Parse(id); err != nil {
+		return nil, ErrUserNotFound
+	}
+	var user models.User
+	if err := db.First(&user, "id = ?", id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrUserNotFound
+		}
+		return nil, err
+	}
+	return &user, nil
+}
+
+func UpdateUser(db *gorm.DB, id string, req models.UpdateUserRequest) (*models.User, error) {
+	user, err := GetUser(db, id)
+	if err != nil {
+		return nil, err
+	}
+
+	if req.Name != nil {
+		name := strings.TrimSpace(*req.Name)
+		switch {
+		case name == "":
+			return nil, &ValidationError{"name", "required"}
+		case len(name) > 100:
+			return nil, &ValidationError{"name", "max 100 characters"}
+		}
+		user.Name = name
+	}
+
+	if req.Password != nil && *req.Password != "" {
+		switch {
+		case len(*req.Password) < minPasswordLength:
+			return nil, &ValidationError{"password", fmt.Sprintf("at least %d characters", minPasswordLength)}
+		case len(*req.Password) > maxPasswordBytes:
+			return nil, &ValidationError{"password", fmt.Sprintf("at most %d bytes", maxPasswordBytes)}
+		}
+		hash, err := HashPassword(*req.Password)
+		if err != nil {
+			return nil, err
+		}
+		user.Password = hash
+	}
+
+	if req.IsAdmin != nil && user.IsAdmin && !*req.IsAdmin {
+		count, err := countAdmins(db, user.ID)
+		if err != nil {
+			return nil, err
+		}
+		if count == 0 {
+			return nil, ErrLastAdmin
+		}
+	}
+	if req.IsAdmin != nil {
+		user.IsAdmin = *req.IsAdmin
+	}
+
+	if err := db.Save(user).Error; err != nil {
+		return nil, err
+	}
+	return user, nil
+}
+
+func DeleteUser(db *gorm.DB, id, actorID string) error {
+	user, err := GetUser(db, id)
+	if err != nil {
+		return err
+	}
+	if user.ID == actorID {
+		return ErrCannotDeleteSelf
+	}
+	if user.IsAdmin {
+		count, err := countAdmins(db, user.ID)
+		if err != nil {
+			return err
+		}
+		if count == 0 {
+			return ErrLastAdmin
+		}
+	}
+	res := db.Delete(&models.User{}, "id = ?", user.ID)
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return ErrUserNotFound
+	}
+	return nil
+}
+
+func countAdmins(db *gorm.DB, excludeID string) (int64, error) {
+	var count int64
+	err := db.Model(&models.User{}).
+		Where("is_admin = ? AND id <> ?", true, excludeID).
+		Count(&count).Error
+	return count, err
 }

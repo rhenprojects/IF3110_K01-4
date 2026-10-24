@@ -1,6 +1,8 @@
 package authctx
 
 import (
+	"web_backend/internal/httpx"
+
 	"github.com/gofiber/fiber/v2"
 )
 
@@ -21,17 +23,17 @@ func IsAdmin(c *fiber.Ctx) bool {
 
 func RequireAuth(c *fiber.Ctx) error {
 	if UserID(c) == "" {
-		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Unauthorized"})
+		return httpx.Error(c, fiber.StatusUnauthorized, "Unauthorized")
 	}
 	return c.Next()
 }
 
 func RequireAdmin(c *fiber.Ctx) error {
 	if UserID(c) == "" {
-		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Unauthorized"})
+		return httpx.Error(c, fiber.StatusUnauthorized, "Unauthorized")
 	}
 	if !IsAdmin(c) {
-		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Platform admin only"})
+		return httpx.Error(c, fiber.StatusForbidden, "Platform admin only")
 	}
 	return c.Next()
 }

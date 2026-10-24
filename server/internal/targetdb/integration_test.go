@@ -1,15 +1,16 @@
 package targetdb_test
 
-
 import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
+	"time"
 	"web_backend/internal/authctx"
 	"web_backend/internal/models"
 	"web_backend/internal/targetdb"
@@ -46,7 +47,10 @@ func setup(t *testing.T) *testEnv {
 	if err := db.Migrator().DropTable(&models.DBConnection{}); err != nil {
 		t.Fatalf("drop table: %v", err)
 	}
-	if err := db.AutoMigrate(&models.DBConnection{}); err != nil {
+	if err := db.AutoMigrate(
+		&models.DBConnection{}, &models.User{}, &models.Group{},
+		&models.GroupMember{}, &models.GroupDatabaseAccess{},
+	); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 
@@ -60,7 +64,9 @@ func setup(t *testing.T) *testEnv {
 
 	app := fiber.New()
 	app.Use(authctx.DevAuth(true))
-	targetdb.NewHandler(svc).RegisterRoutes(app)
+	handler := targetdb.NewHandler(svc)
+	handler.RegisterRoutes(app)
+	handler.RegisterUserRoutes(app)
 	return &testEnv{app: app, db: db, svc: svc, target: target}
 }
 
@@ -89,6 +95,26 @@ func (e *testEnv) do(t *testing.T, who principal, method, path string, body any)
 		req.Header.Set("X-Debug-Admin", "true")
 	}
 
+	resp, err := e.app.Test(req, 15000)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, path, err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	var out map[string]any
+	_ = json.Unmarshal(raw, &out)
+	return resp.StatusCode, out, string(raw)
+}
+
+func (e *testEnv) doAs(t *testing.T, userID, method, path string, body any) (int, map[string]any, string) {
+	t.Helper()
+	var reader io.Reader
+	if body != nil {
+		raw, _ := json.Marshal(body)
+		reader = bytes.NewReader(raw)
+	}
+	req := httptest.NewRequest(method, path, reader)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Debug-User", userID)
 	resp, err := e.app.Test(req, 15000)
 	if err != nil {
 		t.Fatalf("%s %s: %v", method, path, err)
@@ -271,5 +297,66 @@ func TestIntegrationAccessDenied(t *testing.T) {
 	status, body, _ := e.do(t, admin, "GET", "/admin/connections/"+id, nil)
 	if status != fiber.StatusOK || body["name"] != "guarded" {
 		t.Errorf("connection changed by denied requests: status %d, body %v", status, body)
+	}
+}
+
+func TestIntegrationUserConnectionAccess(t *testing.T) {
+	e := setup(t)
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+
+	status, created, raw := e.do(t, admin, "POST", "/admin/connections", e.validInput("accessible-"+suffix))
+	if status != fiber.StatusCreated {
+		t.Fatalf("create connection: status %d, body %s", status, raw)
+	}
+	connectionID, _ := created["id"].(string)
+
+	user := models.User{Username: "access-user-" + suffix, Name: "Access User", Password: "x", IsAdmin: false}
+	if err := e.db.Create(&user).Error; err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	group := models.Group{Name: "access-group-" + suffix}
+	if err := e.db.Create(&group).Error; err != nil {
+		t.Fatalf("create group: %v", err)
+	}
+	if err := e.db.Create(&models.GroupMember{GroupID: group.ID, UserID: user.ID}).Error; err != nil {
+		t.Fatalf("add member: %v", err)
+	}
+	if err := e.db.Create(&models.GroupDatabaseAccess{
+		GroupID: group.ID, ConnectionID: connectionID, Level: models.AccessView,
+	}).Error; err != nil {
+		t.Fatalf("grant view: %v", err)
+	}
+
+	status, body, raw := e.doAs(t, user.ID, "GET", "/connections", nil)
+	if status != fiber.StatusOK || !strings.Contains(raw, "accessible-"+suffix) || body["connections"] == nil {
+		t.Fatalf("list accessible: status %d, body %s", status, raw)
+	}
+
+	if status, _, raw = e.doAs(t, user.ID, "GET", "/connections/"+connectionID, nil); status != fiber.StatusOK {
+		t.Errorf("get accessible: status %d, body %s", status, raw)
+	}
+
+	if status, _, _ = e.doAs(t, user.ID, "PUT", "/connections/"+connectionID, e.validInput("should-fail-"+suffix)); status != fiber.StatusNotFound {
+		t.Errorf("update with view level: status %d, want 404", status)
+	}
+
+	if err := e.db.Model(&models.GroupDatabaseAccess{}).
+		Where("group_id = ? AND connection_id = ?", group.ID, connectionID).
+		Update("level", models.AccessEdit).Error; err != nil {
+		t.Fatalf("grant edit: %v", err)
+	}
+
+	if status, body, raw = e.doAs(t, user.ID, "PUT", "/connections/"+connectionID, e.validInput("renamed-"+suffix)); status != fiber.StatusOK || body["name"] != "renamed-"+suffix {
+		t.Errorf("update with edit level: status %d, body %s", status, raw)
+	}
+	if status, _, raw = e.doAs(t, user.ID, "POST", "/connections/"+connectionID+"/test", nil); status != fiber.StatusOK {
+		t.Errorf("test accessible connection: status %d, body %s", status, raw)
+	}
+
+	if err := e.db.Delete(&models.GroupDatabaseAccess{}, "group_id = ? AND connection_id = ?", group.ID, connectionID).Error; err != nil {
+		t.Fatalf("revoke access: %v", err)
+	}
+	if status, _, _ = e.doAs(t, user.ID, "GET", "/connections/"+connectionID, nil); status != fiber.StatusNotFound {
+		t.Errorf("get after revoke: status %d, want 404", status)
 	}
 }

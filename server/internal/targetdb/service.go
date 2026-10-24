@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"web_backend/internal/authz"
 	"web_backend/internal/models"
 
 	"github.com/google/uuid"
@@ -209,4 +210,30 @@ func translateDBError(err error) error {
 		return ErrDuplicateName
 	}
 	return err
+}
+
+func (s *Service) CanView(ctx context.Context, userID, connectionID string) (bool, error) {
+	return authz.CanView(ctx, s.db, userID, connectionID)
+}
+
+func (s *Service) CanEdit(ctx context.Context, userID, connectionID string) (bool, error) {
+	return authz.CanEdit(ctx, s.db, userID, connectionID)
+}
+
+func (s *Service) ListAccessible(ctx context.Context, userID string) ([]models.DBConnection, error) {
+	conns, err := s.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	visible := make([]models.DBConnection, 0, len(conns))
+	for _, conn := range conns {
+		ok, err := s.CanView(ctx, userID, conn.ID)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			visible = append(visible, conn)
+		}
+	}
+	return visible, nil
 }

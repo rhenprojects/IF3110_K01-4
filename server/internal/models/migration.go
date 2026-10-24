@@ -17,7 +17,7 @@ const (
 type Migration struct {
 	ID           string          `json:"id" gorm:"type:uuid;primaryKey;default:gen_random_uuid()"`
 	ConnectionID string          `json:"connection_id" gorm:"column:connection_id;type:uuid;not null;index;index:idx_migrations_connection_version,unique,where:version IS NOT NULL"`
-	Version      *int            `json:"version" gorm:"column:version;index:idx_migrations_connection_version,unique,where:version IS NOT NULL"`
+	Version      *int            `json:"version" gorm:"column:version;type:bigint;index:idx_migrations_connection_version,unique,where:version IS NOT NULL"`
 	Name         string          `json:"name" gorm:"column:name;type:varchar(200);not null"`
 	SQL          string          `json:"sql" gorm:"column:sql;type:text;not null"`
 	Status       MigrationStatus `json:"status" gorm:"column:status;type:varchar(10);not null;default:'draft';check:chk_migrations_status,status IN ('draft','success','failed')"`
@@ -27,7 +27,7 @@ type Migration struct {
 	CreatedAt    time.Time       `json:"created_at" gorm:"column:created_at;type:timestamptz;not null;default:CURRENT_TIMESTAMP"`
 	UpdatedAt    time.Time       `json:"updated_at" gorm:"column:updated_at;type:timestamptz;not null;default:CURRENT_TIMESTAMP"`
 	ExecutedAt   *time.Time      `json:"executed_at" gorm:"column:executed_at;type:timestamptz"`
-	DurationMs   *int64          `json:"duration_ms" gorm:"column:duration_ms"`
+	DurationMs   *int64          `json:"duration_ms" gorm:"column:duration_ms;type:bigint"`
 
 	Connection DBConnection `json:"-" gorm:"foreignKey:ConnectionID;constraint:OnDelete:RESTRICT"`
 }

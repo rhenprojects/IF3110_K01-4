@@ -30,3 +30,9 @@ type LoginRequest struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
 }
+
+type UpdateUserRequest struct {
+	Name     *string `json:"name"`
+	Password *string `json:"password"`
+	IsAdmin  *bool   `json:"is_admin"`
+}
