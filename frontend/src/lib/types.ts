@@ -48,3 +48,48 @@ export type TestResult = { status: "ok"; server_version: string };
 
 export type AccessLevel = "view" | "edit";
 export type AccessEntry = { connection_id: string; level: AccessLevel };
+
+//[databases] endpoint user biasa (docs/api-contract.md bagian 8)
+export type DatabaseItem = { id: string; name: string; db_name: string; level: AccessLevel };
+
+export type ColumnInfo = { name: string; type: string; nullable: boolean; default: string | null; is_primary_key: boolean };
+export type ConstraintInfo = { name: string; type: "primary_key" | "foreign_key" | "unique" | "check"; definition: string };
+export type IndexInfo = { name: string; is_unique: boolean; definition: string };
+export type TableInfo = {
+  name: string;
+  type: "table" | "view";
+  columns: ColumnInfo[];
+  constraints: ConstraintInfo[];
+  indexes: IndexInfo[];
+};
+export type SchemaInfo = { name: string; tables: TableInfo[] };
+export type SchemaResponse = { schemas: SchemaInfo[] };
+//[rows] tiap baris = array, urutan sama dengan columns; NULL dikirim sebagai null
+export type RowsResponse = {
+  columns: { name: string; type: string }[];
+  rows: unknown[][];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+//[migration] docs/api-contract.md bagian 9
+export type MigrationStatus = "draft" | "success" | "failed";
+export type Migration = {
+  id: string;
+  connection_id: string;
+  version: number | null; //[migration] hanya terisi untuk status success
+  name: string;
+  sql: string;
+  status: MigrationStatus;
+  error: string;
+  created_by: string;
+  created_by_name: string;
+  executed_by: string | null;
+  executed_by_name: string | null;
+  created_at: string;
+  updated_at: string;
+  executed_at: string | null;
+  duration_ms: number | null;
+};
+export type MigrationInput = { name: string; sql: string };
