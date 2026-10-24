@@ -102,6 +102,19 @@ test_integration() {
   (cd "$SERVER_DIR" && TEST_PG_DSN="$PG_DSN" go test -p 1 ./... -count=1)
 }
 
+test_auth() {
+  ensure_db
+  echo "Running auth and security tests..."
+  (cd "$SERVER_DIR" && TEST_PG_DSN="$PG_DSN" go test -p 1 \
+    ./internal/authctx ./internal/authz ./internal/user_handler ./internal/group_handler -count=1)
+}
+
+test_db() {
+  ensure_db
+  echo "Running target database tests..."
+  (cd "$SERVER_DIR" && TEST_PG_DSN="$PG_DSN" go test -p 1 ./internal/targetdb -count=1)
+}
+
 cleanup() {
   if [ -n "$SERVER_PID" ]; then
     kill "$SERVER_PID" 2>/dev/null || true
@@ -405,6 +418,14 @@ case "$1" in
     test_integration
     ;;
 
+  test-auth)
+    test_auth
+    ;;
+
+  test-db)
+    test_db
+    ;;
+
   test-api)
     test_api
     ;;
@@ -429,11 +450,13 @@ case "$1" in
     ;;
 
   *)
-    echo "Usage: $0 {build|run|dev|test [json]|test-unit|test-integration|test-api|test-all|db-up|db-down|clean}"
+    echo "Usage: $0 {build|run|dev|test [json]|test-unit|test-integration|test-auth|test-db|test-api|test-all|db-up|db-down|clean}"
     echo ""
     echo "  test               Smoke-test /api/v1/test (legacy)."
     echo "  test-unit          Run unit tests only."
     echo "  test-integration   Start PostgreSQL, then run integration tests."
+    echo "  test-auth          Run auth, session, authorization, user, and group tests."
+    echo "  test-db            Run target database connection/access tests."
     echo "  test-api           Start PostgreSQL + backend, then run API smoke tests."
     echo "  test-all           Run unit, integration, and API tests."
     echo "  db-up / db-down    Start / remove the test PostgreSQL container."
