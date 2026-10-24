@@ -9,6 +9,7 @@ type AuthCtx = {
   user: User | null;
   loading: boolean;
   sessionExpired: boolean; //[session] true jika user terlempar karena 401 di tengah pemakaian
+  loggedOut: boolean; //[session] true setelah logout sendiri, supaya login berikutnya tidak kembali ke halaman lama
   login: (username: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
 };
@@ -18,6 +19,7 @@ const Ctx = createContext<AuthCtx | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const qc = useQueryClient();
   const [sessionExpired, setSessionExpired] = useState(false);
+  const [loggedOut, setLoggedOut] = useState(false);
 
   //[session] buang cache selain "me" agar data user sebelumnya tidak tampil ke user berikutnya
   const dropCache = useCallback(() => qc.removeQueries({ predicate: (q) => q.queryKey[0] !== "me" }), [qc]);
@@ -53,6 +55,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     onSuccess: (data) => {
       dropCache();
       setSessionExpired(false);
+      setLoggedOut(false);
       qc.setQueryData(["me"], data.user);
     },
   });
@@ -61,6 +64,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     mutationFn: () => api<void>("/users/logout", { method: "POST" }),
     onSettled: () => {
       setSessionExpired(false);
+      setLoggedOut(true);
       qc.setQueryData(["me"], null);
       dropCache();
     },
@@ -72,6 +76,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         user: me.data ?? null,
         loading: me.isLoading,
         sessionExpired,
+        loggedOut,
         login: async (username, password) => void (await loginM.mutateAsync({ username, password })),
         logout: async () => void (await logoutM.mutateAsync()),
       }}

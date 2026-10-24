@@ -5,9 +5,10 @@ import { RouterProvider } from "react-router-dom";
 import { AuthProvider } from "./features/auth/auth";
 import { ToastProvider } from "./components/toast";
 import { router } from "./app/router";
+import { shouldRetry } from "./lib/retry";
 import "./index.css";
 
-const qc = new QueryClient({ defaultOptions: { queries: { refetchOnWindowFocus: false } } });
+const qc = new QueryClient({ defaultOptions: { queries: { refetchOnWindowFocus: false, retry: shouldRetry } } });
 
 async function boot() {
   if (import.meta.env.VITE_USE_MOCK === "true") {

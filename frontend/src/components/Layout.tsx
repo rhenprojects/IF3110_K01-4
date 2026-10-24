@@ -3,10 +3,11 @@ import { useAuth } from "../features/auth/auth";
 
 //[guard] redirect ke /login jika belum login
 export function RequireAuth() {
-  const { user, loading } = useAuth();
+  const { user, loading, loggedOut } = useAuth();
   const loc = useLocation();
   if (loading) return <p className="p-8 text-slate-500">Memuat…</p>;
-  if (!user) return <Navigate to="/login" state={{ from: loc.pathname }} replace />;
+  //[guard] from = path + query agar pilihan table/tab tidak hilang; kosong setelah logout sendiri
+  if (!user) return <Navigate to="/login" state={loggedOut ? null : { from: loc.pathname + loc.search }} replace />;
   return <Outlet />;
 }
 
