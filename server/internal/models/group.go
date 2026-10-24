@@ -8,6 +8,7 @@ type Group struct {
 	ID          string    `json:"id" gorm:"type:uuid;primaryKey;default:gen_random_uuid()"`
 	Name        string    `json:"name" gorm:"column:name;type:varchar(100);uniqueIndex;not null"`
 	Description string    `json:"description" gorm:"column:description;type:varchar(255);not null;default:''"`
+	MemberIDs   []string  `json:"member_ids" gorm:"-"`
 	CreatedAt   time.Time `json:"created_at" gorm:"column:created_at;type:timestamptz;not null;default:CURRENT_TIMESTAMP"`
 	UpdatedAt   time.Time `json:"updated_at" gorm:"column:updated_at;type:timestamptz;not null;default:CURRENT_TIMESTAMP"`
 }

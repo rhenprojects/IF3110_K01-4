@@ -40,6 +40,12 @@ func (h *GroupHandler) RegisterRoutes(router fiber.Router, middleware ...fiber.H
 	g.Put("/:id", h.UpdateGroup)
 	g.Delete("/:id", h.DeleteGroup)
 
+	// Kontrak terbaru: anggota dan akses diganti sekaligus.
+	g.Put("/:id/members", h.SetMembers)
+	g.Get("/:id/access", h.ListAccessContract)
+	g.Put("/:id/access", h.SetAccessList)
+
+	// Endpoint lama dipertahankan agar klien lama dan test lama tetap berjalan.
 	g.Get("/:id/members", h.ListMembers)
 	g.Post("/:id/members", h.AddMember)
 	g.Delete("/:id/members/:userID", h.RemoveMember)
@@ -63,7 +69,7 @@ func (h *GroupHandler) CreateGroup(c *fiber.Ctx) error {
 		return writeError(c, err)
 	}
 
-	group := models.Group{Name: name, Description: description}
+	group := models.Group{Name: name, Description: description, MemberIDs: []string{}}
 	if err := h.DB.Create(&group).Error; err != nil {
 		return writeError(c, translateDBError(err))
 	}
@@ -76,12 +82,22 @@ func (h *GroupHandler) ListGroups(c *fiber.Ctx) error {
 		log.Printf("[group] list failed: %v", err)
 		return httpx.Error(c, fiber.StatusInternalServerError, "Internal server error")
 	}
+	ptrs := make([]*models.Group, len(groups))
+	for i := range groups {
+		ptrs[i] = &groups[i]
+	}
+	if err := h.attachMemberIDs(c, ptrs); err != nil {
+		return writeError(c, err)
+	}
 	return c.JSON(models.GroupListResponse{Groups: groups})
 }
 
 func (h *GroupHandler) GetGroup(c *fiber.Ctx) error {
 	group, err := h.findGroup(c.Params("id"))
 	if err != nil {
+		return writeError(c, err)
+	}
+	if err := h.attachMemberIDs(c, []*models.Group{group}); err != nil {
 		return writeError(c, err)
 	}
 	return c.JSON(group)
@@ -115,6 +131,9 @@ func (h *GroupHandler) UpdateGroup(c *fiber.Ctx) error {
 	if err := h.DB.Save(group).Error; err != nil {
 		return writeError(c, translateDBError(err))
 	}
+	if err := h.attachMemberIDs(c, []*models.Group{group}); err != nil {
+		return writeError(c, err)
+	}
 	return c.JSON(group)
 }
 
@@ -127,6 +146,159 @@ func (h *GroupHandler) DeleteGroup(c *fiber.Ctx) error {
 		return writeError(c, err)
 	}
 	return c.SendStatus(fiber.StatusNoContent)
+}
+
+func (h *GroupHandler) attachMemberIDs(c *fiber.Ctx, groups []*models.Group) error {
+	for _, group := range groups {
+		if group == nil {
+			continue
+		}
+		ids := make([]string, 0)
+		err := h.DB.WithContext(c.UserContext()).
+			Model(&models.GroupMember{}).
+			Where("group_id = ?", group.ID).
+			Order("created_at").
+			Pluck("user_id", &ids).Error
+		if err != nil {
+			return err
+		}
+		group.MemberIDs = ids
+	}
+	return nil
+}
+
+// SetMembers mengganti seluruh daftar anggota group sesuai kontrak API.
+func (h *GroupHandler) SetMembers(c *fiber.Ctx) error {
+	group, err := h.findGroup(c.Params("id"))
+	if err != nil {
+		return writeError(c, err)
+	}
+	var req models.SetGroupMembersRequest
+	if err := c.BodyParser(&req); err != nil {
+		return httpx.Error(c, fiber.StatusBadRequest, "Invalid request body")
+	}
+
+	seen := make(map[string]bool, len(req.UserIDs))
+	ids := make([]string, 0, len(req.UserIDs))
+	for _, id := range req.UserIDs {
+		if _, err := uuid.Parse(id); err != nil {
+			return writeError(c, &ValidationError{"user_ids", "unknown user id"})
+		}
+		if !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
+	}
+
+	if len(ids) > 0 {
+		var count int64
+		if err := h.DB.Model(&models.User{}).Where("id IN ?", ids).Count(&count).Error; err != nil {
+			return writeError(c, err)
+		}
+		if count != int64(len(ids)) {
+			return writeError(c, &ValidationError{"user_ids", "unknown user id"})
+		}
+	}
+
+	err = h.DB.WithContext(c.UserContext()).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Delete(&models.GroupMember{}, "group_id = ?", group.ID).Error; err != nil {
+			return err
+		}
+		for _, userID := range ids {
+			member := models.GroupMember{GroupID: group.ID, UserID: userID}
+			if err := tx.Create(&member).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return writeError(c, err)
+	}
+
+	group.MemberIDs = ids
+	return c.JSON(group)
+}
+
+func (h *GroupHandler) ListAccessContract(c *fiber.Ctx) error {
+	group, err := h.findGroup(c.Params("id"))
+	if err != nil {
+		return writeError(c, err)
+	}
+	entries := make([]models.AccessEntry, 0)
+	err = h.DB.WithContext(c.UserContext()).
+		Table("group_database_access AS gda").
+		Select("gda.connection_id, gda.level").
+		Joins("JOIN db_connections AS c ON c.id = gda.connection_id AND c.deleted_at IS NULL").
+		Where("gda.group_id = ?", group.ID).
+		Order("c.name").
+		Scan(&entries).Error
+	if err != nil {
+		return writeError(c, err)
+	}
+	return c.JSON(models.GroupAccessResponse{Access: entries})
+}
+
+// SetAccessList mengganti seluruh akses database group sesuai kontrak API.
+func (h *GroupHandler) SetAccessList(c *fiber.Ctx) error {
+	group, err := h.findGroup(c.Params("id"))
+	if err != nil {
+		return writeError(c, err)
+	}
+	var req models.SetGroupAccessListRequest
+	if err := c.BodyParser(&req); err != nil {
+		return httpx.Error(c, fiber.StatusBadRequest, "Invalid request body")
+	}
+
+	entries := make([]models.AccessEntry, 0, len(req.Access))
+	seen := make(map[string]bool, len(req.Access))
+	for _, entry := range req.Access {
+		if _, err := uuid.Parse(entry.ConnectionID); err != nil {
+			return writeError(c, &ValidationError{"connection_id", "unknown connection id"})
+		}
+		level, err := validateLevel(string(entry.Level))
+		if err != nil {
+			return writeError(c, err)
+		}
+		if seen[entry.ConnectionID] {
+			continue
+		}
+		seen[entry.ConnectionID] = true
+		entries = append(entries, models.AccessEntry{ConnectionID: entry.ConnectionID, Level: level})
+	}
+
+	if len(entries) > 0 {
+		ids := make([]string, len(entries))
+		for i, entry := range entries {
+			ids[i] = entry.ConnectionID
+		}
+		var count int64
+		if err := h.DB.Model(&models.DBConnection{}).Where("id IN ?", ids).Count(&count).Error; err != nil {
+			return writeError(c, err)
+		}
+		if count != int64(len(ids)) {
+			return writeError(c, &ValidationError{"connection_id", "unknown connection id"})
+		}
+	}
+
+	err = h.DB.WithContext(c.UserContext()).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Delete(&models.GroupDatabaseAccess{}, "group_id = ?", group.ID).Error; err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			access := models.GroupDatabaseAccess{
+				GroupID: group.ID, ConnectionID: entry.ConnectionID, Level: entry.Level,
+			}
+			if err := tx.Create(&access).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return writeError(c, err)
+	}
+	return c.JSON(models.GroupAccessResponse{Access: entries})
 }
 
 func (h *GroupHandler) ListMembers(c *fiber.Ctx) error {
