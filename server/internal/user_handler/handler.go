@@ -3,6 +3,7 @@ package userhandler
 import (
 	"errors"
 	"log"
+	"net/http"
 	"time"
 	"web_backend/internal/authctx"
 	"web_backend/internal/models"
@@ -102,4 +103,16 @@ func (h *UserHandler) RegisterRoutes(router fiber.Router) {
 
 	adminGroup := router.Group("/admin/users", authctx.RequireAdmin)
 	adminGroup.Post("/", h.CreateUser)
+}
+
+func logoutHandler(w http.ResponseWriter, r *http.Request) {
+	cookie := &http.Cookie{
+		Name:     "session_token",
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+	}
+	http.SetCookie(w, cookie)
+	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
