@@ -109,8 +109,13 @@ func TestIntegrationLevelMatrix(t *testing.T) {
 	}
 
 	level, err = authz.Level(ctx, db, admin.ID, conn.ID)
-	if err != nil || level != models.AccessEdit {
-		t.Errorf("admin: level=%q err=%v, want edit", level, err)
+	if err != nil || level != models.AccessNone {
+		t.Errorf("admin without group: level=%q err=%v, want none", level, err)
+	}
+	grant(t, db, admin.ID, conn.ID, models.AccessView)
+	level, err = authz.Level(ctx, db, admin.ID, conn.ID)
+	if err != nil || level != models.AccessView {
+		t.Errorf("admin via group: level=%q err=%v, want view", level, err)
 	}
 
 	for _, ids := range [][2]string{

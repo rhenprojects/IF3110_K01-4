@@ -9,8 +9,9 @@ import (
 	"gorm.io/gorm"
 )
 
-// Level mengembalikan hak akses user terhadap sebuah koneksi database.
-// Admin platform selalu memiliki akses edit.
+// Level mengembalikan hak akses efektif user terhadap sebuah koneksi database.
+// Akses hanya berasal dari group; menjadi Platform Admin tidak memberi akses
+// otomatis ke isi database (docs/api-contract.md bagian 3.5).
 func Level(ctx context.Context, db *gorm.DB, userID, connectionID string) (models.AccessLevel, error) {
 	if db == nil {
 		return models.AccessNone, nil
@@ -23,14 +24,11 @@ func Level(ctx context.Context, db *gorm.DB, userID, connectionID string) (model
 	}
 
 	var user models.User
-	if err := db.WithContext(ctx).Select("is_admin").First(&user, "id = ?", userID).Error; err != nil {
+	if err := db.WithContext(ctx).Select("id").First(&user, "id = ?", userID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return models.AccessNone, nil
 		}
 		return models.AccessNone, err
-	}
-	if user.IsAdmin {
-		return models.AccessEdit, nil
 	}
 
 	var levels []string
