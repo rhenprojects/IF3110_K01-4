@@ -77,7 +77,7 @@ func main() {
 	if len(hashKey) == 0 || len(blockKey) == 0 {
 		log.Println("[WARN] SESSION_HASH_KEY atau SESSION_BLOCK_KEY belum diset. Cookie session memakai key acak dan tidak valid setelah server restart")
 	}
-	userhandler.InitSession(hashKey, blockKey)
+	userhandler.InitSession(db, hashKey, blockKey)
 
 	app := fiber.New()
 	app.Use(fiberLogger.New())

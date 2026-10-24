@@ -8,59 +8,58 @@ import (
 	"github.com/gorilla/securecookie"
 )
 
-type SessionManager struct {
-	cookie *securecookie.SecureCookie
+const sessionCookieName = "session"
+
+type sessionCookie struct {
+	codec *securecookie.SecureCookie
 }
 
-var Session *SessionManager
-
-func NewSessionManager(hashKey, blockKey []byte) *SessionManager {
+func newSessionCookie(hashKey, blockKey []byte) *sessionCookie {
 	if len(hashKey) == 0 {
 		hashKey = securecookie.GenerateRandomKey(64)
 	}
 	if len(blockKey) == 0 {
 		blockKey = securecookie.GenerateRandomKey(32)
 	}
-
-	return &SessionManager{
-		cookie: securecookie.New(hashKey, blockKey),
-	}
+	return &sessionCookie{codec: securecookie.New(hashKey, blockKey)}
 }
 
-func InitSession(hashKey, blockKey []byte) *SessionManager {
-	Session = NewSessionManager(hashKey, blockKey)
-	return Session
-}
-
-func (s *SessionManager) SetSessionCookie(c *fiber.Ctx, userID string, duration time.Duration) error {
-	encoded, err := s.cookie.Encode("session", userID)
+func (s *sessionCookie) set(c *fiber.Ctx, token string, expires time.Time) error {
+	encoded, err := s.codec.Encode(sessionCookieName, token)
 	if err != nil {
 		return err
 	}
-
 	c.Cookie(&fiber.Cookie{
-		Name:     "session",
+		Name:     sessionCookieName,
 		Value:    encoded,
 		Path:     "/",
 		HTTPOnly: true,
 		Secure:   false,
 		SameSite: "Lax",
-		Expires:  time.Now().Add(duration),
+		Expires:  expires,
 	})
-
 	return nil
 }
 
-func (s *SessionManager) GetSessionUserID(c *fiber.Ctx) (string, error) {
-	cookieVal := c.Cookies("session")
-	if cookieVal == "" {
+func (s *sessionCookie) get(c *fiber.Ctx) (string, error) {
+	encoded := c.Cookies(sessionCookieName)
+	if encoded == "" {
 		return "", errors.New("session cookie not found")
 	}
-
-	var userID string
-	if err := s.cookie.Decode("session", cookieVal, &userID); err != nil {
-		return "", errors.New("invalid or expired session cookie")
+	var token string
+	if err := s.codec.Decode(sessionCookieName, encoded, &token); err != nil {
+		return "", errors.New("invalid session cookie")
 	}
+	return token, nil
+}
 
-	return userID, nil
+func (s *sessionCookie) clear(c *fiber.Ctx) {
+	c.Cookie(&fiber.Cookie{
+		Name:     sessionCookieName,
+		Value:    "",
+		Path:     "/",
+		HTTPOnly: true,
+		SameSite: "Lax",
+		MaxAge:   -1,
+	})
 }
