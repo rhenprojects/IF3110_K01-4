@@ -9,8 +9,8 @@ import (
 )
 
 var (
-	ErrNotFound      = errors.New("database connection not found")
-	ErrDuplicateName = errors.New("database connection name already exists")
+	ErrNotFound         = errors.New("database connection not found")
+	ErrDuplicateName    = errors.New("database connection name already exists")
 	ErrAuthFailed       = errors.New("authentication to target database failed")
 	ErrDatabaseNotFound = errors.New("target database does not exist")
 	ErrTimeout          = errors.New("timed out connecting to target database")

@@ -2,6 +2,7 @@ package api
 
 import (
 	"web_backend/internal/authctx"
+	grouphandler "web_backend/internal/group_handler"
 	"web_backend/internal/httpx"
 	"web_backend/internal/models"
 	"web_backend/internal/targetdb"
@@ -62,5 +63,9 @@ func SetupRoutes(app *fiber.App, db *gorm.DB, connService *targetdb.Service, dev
 
 	userHandler.RegisterRoutes(api, api, middleware...)
 
-	targetdb.NewHandler(connService).RegisterRoutes(api)
+	connHandler := targetdb.NewHandler(connService)
+	connHandler.RegisterRoutes(api, middleware...)
+	connHandler.RegisterUserRoutes(api, middleware...)
+
+	grouphandler.NewGroupHandler(db).RegisterRoutes(api, middleware...)
 }
