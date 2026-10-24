@@ -21,13 +21,16 @@ type Migration struct {
 	Name         string          `json:"name" gorm:"column:name;type:varchar(200);not null"`
 	SQL          string          `json:"sql" gorm:"column:sql;type:text;not null"`
 	Status       MigrationStatus `json:"status" gorm:"column:status;type:varchar(10);not null;default:'draft';check:chk_migrations_status,status IN ('draft','success','failed')"`
-	Error        string          `json:"error,omitempty" gorm:"column:error;type:text;not null;default:''"`
+	Error        string          `json:"error" gorm:"column:error;type:text;not null;default:''"`
 	CreatedBy    string          `json:"created_by" gorm:"column:created_by;type:varchar(64);not null"`
 	ExecutedBy   *string         `json:"executed_by" gorm:"column:executed_by;type:varchar(64)"`
 	CreatedAt    time.Time       `json:"created_at" gorm:"column:created_at;type:timestamptz;not null;default:CURRENT_TIMESTAMP"`
 	UpdatedAt    time.Time       `json:"updated_at" gorm:"column:updated_at;type:timestamptz;not null;default:CURRENT_TIMESTAMP"`
 	ExecutedAt   *time.Time      `json:"executed_at" gorm:"column:executed_at;type:timestamptz"`
 	DurationMs   *int64          `json:"duration_ms" gorm:"column:duration_ms;type:bigint"`
+
+	CreatedByName  string  `json:"created_by_name" gorm:"-"`
+	ExecutedByName *string `json:"executed_by_name" gorm:"-"`
 
 	Connection DBConnection `json:"-" gorm:"foreignKey:ConnectionID;constraint:OnDelete:RESTRICT"`
 }
