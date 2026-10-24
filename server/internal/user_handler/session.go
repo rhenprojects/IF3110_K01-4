@@ -13,9 +13,10 @@ import (
 )
 
 const (
-	defaultIdleTimeout     = 30 * time.Minute
-	defaultAbsoluteTimeout = 24 * time.Hour
-	defaultGracePeriod     = 30 * time.Second
+	defaultIdleTimeout      = 30 * time.Minute
+	defaultAbsoluteTimeout  = 12 * time.Hour
+	defaultRotationInterval = 15 * time.Minute
+	defaultGracePeriod      = 30 * time.Second
 )
 
 var (
@@ -25,24 +26,27 @@ var (
 )
 
 type SessionConfig struct {
-	IdleTimeout     time.Duration
-	AbsoluteTimeout time.Duration
-	GracePeriod     time.Duration
+	IdleTimeout      time.Duration
+	AbsoluteTimeout  time.Duration
+	RotationInterval time.Duration
+	GracePeriod      time.Duration
 }
 
 func DefaultSessionConfig() SessionConfig {
 	return SessionConfig{
-		IdleTimeout:     defaultIdleTimeout,
-		AbsoluteTimeout: defaultAbsoluteTimeout,
-		GracePeriod:     defaultGracePeriod,
+		IdleTimeout:      defaultIdleTimeout,
+		AbsoluteTimeout:  defaultAbsoluteTimeout,
+		RotationInterval: defaultRotationInterval,
+		GracePeriod:      defaultGracePeriod,
 	}
 }
 
 type SessionService struct {
-	DB     *gorm.DB
-	cookie *sessionCookie
-	Config SessionConfig
-	Now    func() time.Time
+	DB            *gorm.DB
+	cookie        *sessionCookie
+	Config        SessionConfig
+	SecureCookies bool
+	Now           func() time.Time
 }
 
 var Session *SessionService
@@ -82,6 +86,13 @@ func (s *SessionService) absoluteTimeout() time.Duration {
 	return defaultAbsoluteTimeout
 }
 
+func (s *SessionService) rotationInterval() time.Duration {
+	if s.Config.RotationInterval > 0 {
+		return s.Config.RotationInterval
+	}
+	return defaultRotationInterval
+}
+
 func (s *SessionService) gracePeriod() time.Duration {
 	if s.Config.GracePeriod > 0 {
 		return s.Config.GracePeriod
@@ -102,8 +113,6 @@ func hashToken(token string) []byte {
 	return sum[:]
 }
 
-// Create membuat session baru dan memasang cookie token. CSRF token
-// dikembalikan agar bisa dipakai klien pada request yang mengubah data.
 func (s *SessionService) Create(c *fiber.Ctx, userID string) (*models.Session, string, error) {
 	if s == nil || s.DB == nil {
 		return nil, "", errors.New("session storage is not available")
@@ -131,10 +140,10 @@ func (s *SessionService) Create(c *fiber.Ctx, userID string) (*models.Session, s
 	if err := s.DB.Create(&session).Error; err != nil {
 		return nil, "", err
 	}
-	if err := s.cookie.set(c, token, session.AbsoluteExpiresAt); err != nil {
+	if err := s.cookie.set(c, token, session.AbsoluteExpiresAt, s.SecureCookies); err != nil {
 		return nil, "", err
 	}
-	s.cookie.setCSRF(c, csrfToken, session.AbsoluteExpiresAt)
+	s.cookie.setCSRF(c, csrfToken, session.AbsoluteExpiresAt, s.SecureCookies)
 	return &session, csrfToken, nil
 }
 
@@ -152,8 +161,10 @@ func (s *SessionService) Validate(c *fiber.Ctx) (*models.Session, error) {
 	now := s.now()
 
 	var session models.Session
+	matchedPrev := false
 	err = s.DB.Where("token_hash = ?", tokenHash).First(&session).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
+		matchedPrev = true
 		err = s.DB.
 			Where("prev_token_hash = ? AND prev_valid_until IS NOT NULL AND prev_valid_until > ?", tokenHash, now).
 			First(&session).Error
@@ -173,23 +184,29 @@ func (s *SessionService) Validate(c *fiber.Ctx) (*models.Session, error) {
 		return nil, ErrExpiredSession
 	}
 
-	newToken, err := generateToken()
-	if err != nil {
-		return nil, err
+	rotate := matchedPrev || session.RotatedAt.IsZero() || now.Sub(session.RotatedAt) >= s.rotationInterval()
+	var newToken string
+	if rotate {
+		newToken, err = generateToken()
+		if err != nil {
+			return nil, err
+		}
+		session.PrevTokenHash = session.TokenHash
+		prevValidUntil := now.Add(s.gracePeriod())
+		session.PrevValidUntil = &prevValidUntil
+		session.TokenHash = hashToken(newToken)
+		session.RotatedAt = now
 	}
-	session.PrevTokenHash = session.TokenHash
-	prevValidUntil := now.Add(s.gracePeriod())
-	session.PrevValidUntil = &prevValidUntil
-	session.TokenHash = hashToken(newToken)
-	session.RotatedAt = now
 	session.LastSeenAt = now
 	if err := s.DB.Save(&session).Error; err != nil {
 		return nil, err
 	}
-	if err := s.cookie.set(c, newToken, session.AbsoluteExpiresAt); err != nil {
-		return nil, err
+	if rotate {
+		if err := s.cookie.set(c, newToken, session.AbsoluteExpiresAt, s.SecureCookies); err != nil {
+			return nil, err
+		}
+		s.cookie.setCSRF(c, session.CSRFToken, session.AbsoluteExpiresAt, s.SecureCookies)
 	}
-	s.cookie.setCSRF(c, session.CSRFToken, session.AbsoluteExpiresAt)
 
 	return &session, nil
 }
@@ -213,6 +230,6 @@ func (s *SessionService) Revoke(c *fiber.Ctx) error {
 			return err
 		}
 	}
-	s.cookie.clear(c)
+	s.cookie.clear(c, s.SecureCookies)
 	return nil
 }

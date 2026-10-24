@@ -20,14 +20,8 @@ type EchoTestResponse struct {
 }
 
 type LoginResponse struct {
-	Message   string    `json:"message"`
-	User      User      `json:"user"`
-	CSRFToken string    `json:"csrf_token"`
-	ExpiresAt time.Time `json:"expires_at"`
-}
-
-type CSRFResponse struct {
-	CSRFToken string `json:"csrf_token"`
+	Message string `json:"message"`
+	User    User   `json:"user"`
 }
 
 type UserListResponse struct {

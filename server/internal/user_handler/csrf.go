@@ -28,7 +28,7 @@ func (h *UserHandler) RequireCSRF(c *fiber.Ctx) error {
 		token = c.FormValue("csrf_token")
 	}
 	if subtle.ConstantTimeCompare([]byte(strings.TrimSpace(token)), []byte(session.CSRFToken)) != 1 {
-		return httpx.Error(c, fiber.StatusForbidden, "Invalid or missing CSRF token")
+		return httpx.Error(c, fiber.StatusForbidden, "Invalid CSRF token")
 	}
 	return c.Next()
 }

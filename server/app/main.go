@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"os"
+	"strings"
 	"web_backend/internal/api"
 	"web_backend/internal/models"
 	"web_backend/internal/targetdb"
@@ -77,7 +78,16 @@ func main() {
 	if len(hashKey) == 0 || len(blockKey) == 0 {
 		log.Println("[WARN] SESSION_HASH_KEY atau SESSION_BLOCK_KEY belum diset. Cookie session memakai key acak dan tidak valid setelah server restart")
 	}
-	userhandler.InitSession(db, hashKey, blockKey)
+	sessionService := userhandler.InitSession(db, hashKey, blockKey)
+	env := strings.ToLower(strings.TrimSpace(os.Getenv("APP_ENV")))
+	secureCookies := env == "production" || env == "prod"
+	if !secureCookies {
+		switch strings.ToLower(strings.TrimSpace(os.Getenv("COOKIE_SECURE"))) {
+		case "true", "1":
+			secureCookies = true
+		}
+	}
+	sessionService.SecureCookies = secureCookies
 
 	app := fiber.New()
 	app.Use(fiberLogger.New())

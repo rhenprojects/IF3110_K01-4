@@ -56,17 +56,14 @@ func (h *UserHandler) Login(c *fiber.Ctx) error {
 		return httpx.Error(c, fiber.StatusUnauthorized, "Invalid username or password")
 	}
 
-	session, csrfToken, err := Session.Create(c, user.ID)
-	if err != nil {
+	if _, _, err := Session.Create(c, user.ID); err != nil {
 		log.Printf("[user] create session failed: %v", err)
 		return httpx.Error(c, fiber.StatusInternalServerError, "Failed to create session")
 	}
 
 	return c.JSON(models.LoginResponse{
-		Message:   "Login successful",
-		User:      user,
-		CSRFToken: csrfToken,
-		ExpiresAt: session.AbsoluteExpiresAt,
+		Message: "Login successful",
+		User:    user,
 	})
 }
 
@@ -76,14 +73,6 @@ func (h *UserHandler) Logout(c *fiber.Ctx) error {
 		return httpx.Error(c, fiber.StatusInternalServerError, "Failed to logout")
 	}
 	return c.SendStatus(fiber.StatusNoContent)
-}
-
-func (h *UserHandler) GetCSRFToken(c *fiber.Ctx) error {
-	session := SessionFrom(c)
-	if session == nil {
-		return httpx.Error(c, fiber.StatusUnauthorized, "Unauthorized")
-	}
-	return c.JSON(models.CSRFResponse{CSRFToken: session.CSRFToken})
 }
 
 func (h *UserHandler) GetProfile(c *fiber.Ctx) error {
@@ -116,7 +105,7 @@ func (h *UserHandler) UpdateUser(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return httpx.Error(c, fiber.StatusBadRequest, "Invalid request body")
 	}
-	if c.Params("id") == authctx.UserID(c) && req.IsAdmin != nil && !*req.IsAdmin {
+	if sameUserID(c.Params("id"), authctx.UserID(c)) && req.IsAdmin != nil && !*req.IsAdmin {
 		return httpx.Error(c, fiber.StatusConflict, "cannot remove your own admin status")
 	}
 	user, err := UpdateUser(h.DB, c.Params("id"), req)
@@ -166,7 +155,6 @@ func (h *UserHandler) RegisterRoutes(public, protected fiber.Router, middleware 
 
 	users := protected.Group("/users", protectedMiddleware(h.requireDB)...)
 	users.Get("/profile", h.GetProfile)
-	users.Get("/csrf", h.GetCSRFToken)
 	users.Post("/logout", h.Logout)
 
 	admin := protected.Group("/admin/users", protectedMiddleware(h.requireDB, authctx.RequireAdmin)...)

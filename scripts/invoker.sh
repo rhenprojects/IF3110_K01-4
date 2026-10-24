@@ -303,6 +303,8 @@ run_contract_tests() {
   assert_status 200 "admin login"
   assert_contains "$BODY" "\"username\":\"$ADMIN_USER\"" "admin identity"
   assert_not_contains "$BODY" "$ADMIN_PASS" "password hidden"
+  assert_not_contains "$BODY" "csrf_token" "csrf token not exposed in login body"
+  assert_not_contains "$BODY" "expires_at" "session expiry not exposed in login body"
   ADMIN_ID=$(json_string "$BODY" id)
   ADMIN_CSRF=$(cookie_value "$ADMIN_JAR" csrf_token)
   [ -n "$ADMIN_CSRF" ] || fail "csrf_token cookie set"
@@ -311,6 +313,9 @@ run_contract_tests() {
   request GET /users/profile "" "$ADMIN_JAR"
   assert_status 200 "profile with session"
   assert_contains "$BODY" "\"username\":\"$ADMIN_USER\"" "profile identity"
+
+  request GET /users/csrf "" "$ADMIN_JAR"
+  assert_status 404 "csrf token endpoint not exposed"
 
   section "Users"
   USER_NAME="apiuser$$"
@@ -524,6 +529,30 @@ run_contract_tests() {
   request PUT "/admin/users/$USER_ID" '{"name":"API User Updated"}' "$ADMIN_JAR" "$ADMIN_CSRF"
   assert_status 200 "update user"
   assert_contains "$BODY" '"name":"API User Updated"' "updated name"
+
+  UPDATED_USER_PASS="apiuser-new-password"
+  request PUT "/admin/users/$USER_ID" "{\"password\":\"$UPDATED_USER_PASS\"}" "$ADMIN_JAR" "$ADMIN_CSRF"
+  assert_status 200 "update user password"
+
+  request GET /users/profile "" "$USER_JAR"
+  assert_status 401 "password change revokes user session"
+
+  request POST /users/login "{\"username\":\"$USER_NAME\",\"password\":\"$UPDATED_USER_PASS\"}" "$USER_JAR"
+  assert_status 200 "login with updated password"
+  USER_CSRF=$(cookie_value "$USER_JAR" csrf_token)
+  [ -n "$USER_CSRF" ] || fail "csrf_token cookie set after relogin"
+  ok "csrf_token cookie set after relogin"
+
+  request PUT "/admin/users/$USER_ID" '{"is_admin":true}' "$ADMIN_JAR" "$ADMIN_CSRF"
+  assert_status 200 "change admin status"
+  request GET /users/profile "" "$USER_JAR"
+  assert_status 401 "admin status change revokes user session"
+
+  request POST /users/login "{\"username\":\"$USER_NAME\",\"password\":\"$UPDATED_USER_PASS\"}" "$USER_JAR"
+  assert_status 200 "login after admin status change"
+  USER_CSRF=$(cookie_value "$USER_JAR" csrf_token)
+  [ -n "$USER_CSRF" ] || fail "csrf_token cookie set after admin status change"
+  ok "csrf_token cookie set after admin status change"
 
   request POST /users/logout "" "$USER_JAR" "$USER_CSRF"
   assert_status 204 "user logout"

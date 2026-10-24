@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 	"web_backend/internal/models"
 
 	"github.com/google/uuid"
@@ -129,6 +130,18 @@ var (
 	ErrCannotDeleteSelf = errors.New("cannot delete your own account")
 )
 
+func sameUserID(a, b string) bool {
+	first, err := uuid.Parse(a)
+	if err != nil {
+		return false
+	}
+	second, err := uuid.Parse(b)
+	if err != nil {
+		return false
+	}
+	return first == second
+}
+
 func GetUser(db *gorm.DB, id string) (*models.User, error) {
 	if _, err := uuid.Parse(id); err != nil {
 		return nil, ErrUserNotFound
@@ -160,6 +173,7 @@ func UpdateUser(db *gorm.DB, id string, req models.UpdateUserRequest) (*models.U
 		user.Name = name
 	}
 
+	sensitiveChange := false
 	if req.Password != nil && *req.Password != "" {
 		switch {
 		case len(*req.Password) < minPasswordLength:
@@ -172,22 +186,34 @@ func UpdateUser(db *gorm.DB, id string, req models.UpdateUserRequest) (*models.U
 			return nil, err
 		}
 		user.Password = hash
+		sensitiveChange = true
 	}
 
-	if req.IsAdmin != nil && user.IsAdmin && !*req.IsAdmin {
-		count, err := countAdmins(db, user.ID)
-		if err != nil {
-			return nil, err
-		}
-		if count == 0 {
-			return nil, ErrLastAdmin
-		}
-	}
 	if req.IsAdmin != nil {
+		if *req.IsAdmin != user.IsAdmin {
+			sensitiveChange = true
+			if user.IsAdmin && !*req.IsAdmin {
+				count, err := countAdmins(db, user.ID)
+				if err != nil {
+					return nil, err
+				}
+				if count == 0 {
+					return nil, ErrLastAdmin
+				}
+			}
+		}
 		user.IsAdmin = *req.IsAdmin
 	}
 
-	if err := db.Save(user).Error; err != nil {
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Save(user).Error; err != nil {
+			return err
+		}
+		if sensitiveChange {
+			return revokeUserSessions(tx, user.ID)
+		}
+		return nil
+	}); err != nil {
 		return nil, err
 	}
 	return user, nil
@@ -198,7 +224,7 @@ func DeleteUser(db *gorm.DB, id, actorID string) error {
 	if err != nil {
 		return err
 	}
-	if user.ID == actorID {
+	if sameUserID(user.ID, actorID) {
 		return ErrCannotDeleteSelf
 	}
 	if user.IsAdmin {
@@ -210,14 +236,22 @@ func DeleteUser(db *gorm.DB, id, actorID string) error {
 			return ErrLastAdmin
 		}
 	}
-	res := db.Delete(&models.User{}, "id = ?", user.ID)
-	if res.Error != nil {
-		return res.Error
-	}
-	if res.RowsAffected == 0 {
-		return ErrUserNotFound
-	}
-	return nil
+	return db.Transaction(func(tx *gorm.DB) error {
+		res := tx.Delete(&models.User{}, "id = ?", user.ID)
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return ErrUserNotFound
+		}
+		return revokeUserSessions(tx, user.ID)
+	})
+}
+
+func revokeUserSessions(tx *gorm.DB, userID string) error {
+	return tx.Model(&models.Session{}).
+		Where("user_id = ? AND revoked_at IS NULL", userID).
+		Update("revoked_at", time.Now().UTC()).Error
 }
 
 func countAdmins(db *gorm.DB, excludeID string) (int64, error) {

@@ -473,6 +473,9 @@ func (h *Handler) writeError(c *fiber.Ctx, err error) error {
 	case errors.Is(err, targetdb.ErrUnreachable):
 		log.Printf("[database] target unreachable: %v", err)
 		return httpx.Error(c, fiber.StatusBadGateway, targetdb.ErrUnreachable.Error())
+	case errors.Is(err, targetdb.ErrDecrypt):
+		log.Printf("[database] stored credentials cannot be decrypted: %v", err)
+		return httpx.Error(c, fiber.StatusInternalServerError, targetdb.ErrDecrypt.Error()+"; please re-enter the password")
 	}
 	log.Printf("[database] internal error: %v", err)
 	return httpx.Error(c, fiber.StatusInternalServerError, "Internal server error")

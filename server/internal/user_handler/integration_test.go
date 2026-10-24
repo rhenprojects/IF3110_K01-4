@@ -95,7 +95,13 @@ func login(t *testing.T, app *fiber.App, username, password string) (apiResponse
 		"username": username, "password": password,
 	}, nil, nil)
 	cookies := replaceSessionCookie(nil, resp)
-	csrf, _ := resp.Body["csrf_token"].(string)
+	csrf := ""
+	for _, cookie := range resp.Cookies {
+		if cookie.Name == "csrf_token" {
+			csrf = cookie.Value
+			break
+		}
+	}
 	return resp, cookies, csrf
 }
 
@@ -142,16 +148,23 @@ func TestIntegrationLogin(t *testing.T) {
 	if strings.Contains(resp.Raw, "alice-password") || strings.Contains(resp.Raw, "$2a$") {
 		t.Errorf("login response leaks password or hash: %s", resp.Raw)
 	}
+	if strings.Contains(resp.Raw, "csrf_token") || strings.Contains(resp.Raw, "expires_at") {
+		t.Errorf("login response leaks session metadata: %s", resp.Raw)
+	}
 	if user, _ := resp.Body["user"].(map[string]any); user["username"] != "alice" {
 		t.Errorf("login user = %v", resp.Body["user"])
 	}
 	if csrf == "" || len(cookies) == 0 {
-		t.Fatalf("login must return csrf token and session cookie: cookies=%v body=%s", cookies, resp.Raw)
+		t.Fatalf("login must set csrf and session cookies: cookies=%v body=%s", cookies, resp.Raw)
 	}
 
 	profile := call(t, app, "GET", "/users/profile", nil, nil, cookies)
 	if profile.Status != fiber.StatusOK || !strings.Contains(profile.Raw, `"username":"alice"`) {
 		t.Errorf("profile: status %d, body %s", profile.Status, profile.Raw)
+	}
+
+	if csrfEndpoint := call(t, app, "GET", "/users/csrf", nil, nil, cookies); csrfEndpoint.Status != fiber.StatusNotFound {
+		t.Errorf("GET /users/csrf: status %d, want 404", csrfEndpoint.Status)
 	}
 
 	wrong := call(t, app, "POST", "/users/login", map[string]string{"username": "alice", "password": "nope-nope"}, nil, nil)
@@ -164,11 +177,27 @@ func TestIntegrationLogin(t *testing.T) {
 
 func TestIntegrationSessionRotationAndGrace(t *testing.T) {
 	app, db := setup(t)
-	if _, err := userhandler.CreateUser(db, models.CreateUserRequest{Username: "alice", Password: "alice-password"}); err != nil {
+	user, err := userhandler.CreateUser(db, models.CreateUserRequest{Username: "alice", Password: "alice-password"})
+	if err != nil {
 		t.Fatal(err)
 	}
 	_, cookies, _ := login(t, app, "alice", "alice-password")
 	oldCookie := cookies[0].Value
+
+	withinInterval := call(t, app, "GET", "/users/profile", nil, nil, cookies)
+	if withinInterval.Status != fiber.StatusOK {
+		t.Fatalf("profile: status %d, body %s", withinInterval.Status, withinInterval.Raw)
+	}
+	cookies = replaceSessionCookie(cookies, withinInterval)
+	if cookies[0].Value != oldCookie {
+		t.Fatal("session token rotated before the 15 minute interval")
+	}
+
+	if err := db.Model(&models.Session{}).
+		Where("user_id = ?", user.ID).
+		Update("rotated_at", time.Now().Add(-16*time.Minute)).Error; err != nil {
+		t.Fatalf("age session: %v", err)
+	}
 
 	first := call(t, app, "GET", "/users/profile", nil, nil, cookies)
 	if first.Status != fiber.StatusOK {
@@ -176,13 +205,17 @@ func TestIntegrationSessionRotationAndGrace(t *testing.T) {
 	}
 	cookies = replaceSessionCookie(cookies, first)
 	if cookies[0].Value == oldCookie {
-		t.Fatal("session token was not rotated")
+		t.Fatal("session token was not rotated after the interval")
 	}
 
-	// Cookie lama masih diterima selama grace period.
+	// Cookie lama masih diterima selama grace period dan client menerima token baru.
 	grace := call(t, app, "GET", "/users/profile", nil, nil, []*http.Cookie{{Name: "session", Value: oldCookie}})
 	if grace.Status != fiber.StatusOK {
 		t.Errorf("old token during grace: status %d, body %s", grace.Status, grace.Raw)
+	}
+	graceCookies := replaceSessionCookie(nil, grace)
+	if len(graceCookies) == 0 || graceCookies[0].Value == oldCookie {
+		t.Error("request with grace token did not rotate the session again")
 	}
 }
 
@@ -195,6 +228,12 @@ func TestIntegrationSessionGraceExpires(t *testing.T) {
 
 	_, cookies, _ := login(t, app, "alice", "alice-password")
 	oldCookie := cookies[0].Value
+
+	if err := db.Model(&models.Session{}).
+		Where("user_id = ?", user.ID).
+		Update("rotated_at", time.Now().Add(-16*time.Minute)).Error; err != nil {
+		t.Fatalf("age session: %v", err)
+	}
 
 	first := call(t, app, "GET", "/users/profile", nil, nil, cookies)
 	if first.Status != fiber.StatusOK {
@@ -361,6 +400,40 @@ func TestIntegrationUserCRUD(t *testing.T) {
 	after := call(t, app, "GET", "/admin/users/"+bobID, nil, nil, cookies)
 	if after.Status != fiber.StatusNotFound {
 		t.Errorf("get deleted: status %d, want 404", after.Status)
+	}
+}
+
+func TestIntegrationSensitiveUserUpdatesRevokeSessions(t *testing.T) {
+	app, db := setup(t)
+	if _, err := userhandler.EnsureAdmin(db, "root", "rootpassword"); err != nil {
+		t.Fatal(err)
+	}
+	bob, err := userhandler.CreateUser(db, models.CreateUserRequest{Username: "bob", Password: "bob-password"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, adminCookies, adminCSRF := login(t, app, "root", "rootpassword")
+	_, bobCookies, _ := login(t, app, "bob", "bob-password")
+
+	updated := call(t, app, "PUT", "/admin/users/"+bob.ID, map[string]any{
+		"password": "bob-new-password",
+	}, csrfHeaders(adminCSRF), adminCookies)
+	if updated.Status != fiber.StatusOK {
+		t.Fatalf("update password: status %d, body %s", updated.Status, updated.Raw)
+	}
+	if profile := call(t, app, "GET", "/users/profile", nil, nil, bobCookies); profile.Status != fiber.StatusUnauthorized {
+		t.Errorf("session after password change: status %d, want 401", profile.Status)
+	}
+
+	_, bobCookies, _ = login(t, app, "bob", "bob-new-password")
+	promoted := call(t, app, "PUT", "/admin/users/"+bob.ID, map[string]any{
+		"is_admin": true,
+	}, csrfHeaders(adminCSRF), adminCookies)
+	if promoted.Status != fiber.StatusOK {
+		t.Fatalf("promote: status %d, body %s", promoted.Status, promoted.Raw)
+	}
+	if profile := call(t, app, "GET", "/users/profile", nil, nil, bobCookies); profile.Status != fiber.StatusUnauthorized {
+		t.Errorf("session after admin change: status %d, want 401", profile.Status)
 	}
 }
 

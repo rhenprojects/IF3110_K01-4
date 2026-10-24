@@ -27,7 +27,7 @@ func newSessionCookie(hashKey, blockKey []byte) *sessionCookie {
 	return &sessionCookie{codec: securecookie.New(hashKey, blockKey)}
 }
 
-func (s *sessionCookie) set(c *fiber.Ctx, token string, expires time.Time) error {
+func (s *sessionCookie) set(c *fiber.Ctx, token string, expires time.Time, secure bool) error {
 	encoded, err := s.codec.Encode(sessionCookieName, token)
 	if err != nil {
 		return err
@@ -37,22 +37,20 @@ func (s *sessionCookie) set(c *fiber.Ctx, token string, expires time.Time) error
 		Value:    encoded,
 		Path:     "/",
 		HTTPOnly: true,
-		Secure:   false,
+		Secure:   secure,
 		SameSite: "Lax",
 		Expires:  expires,
 	})
 	return nil
 }
 
-// setCSRF memasang token di cookie yang sengaja tidak HttpOnly agar JavaScript
-// dapat membacanya dan mengirimnya lewat header X-CSRF-Token.
-func (s *sessionCookie) setCSRF(c *fiber.Ctx, token string, expires time.Time) {
+func (s *sessionCookie) setCSRF(c *fiber.Ctx, token string, expires time.Time, secure bool) {
 	c.Cookie(&fiber.Cookie{
 		Name:     csrfCookieName,
 		Value:    token,
 		Path:     "/",
 		HTTPOnly: false,
-		Secure:   false,
+		Secure:   secure,
 		SameSite: "Lax",
 		Expires:  expires,
 	})
@@ -70,12 +68,13 @@ func (s *sessionCookie) get(c *fiber.Ctx) (string, error) {
 	return token, nil
 }
 
-func (s *sessionCookie) clear(c *fiber.Ctx) {
+func (s *sessionCookie) clear(c *fiber.Ctx, secure bool) {
 	c.Cookie(&fiber.Cookie{
 		Name:     sessionCookieName,
 		Value:    "",
 		Path:     "/",
 		HTTPOnly: true,
+		Secure:   secure,
 		SameSite: "Lax",
 		MaxAge:   -1,
 	})
@@ -84,6 +83,7 @@ func (s *sessionCookie) clear(c *fiber.Ctx) {
 		Value:    "",
 		Path:     "/",
 		HTTPOnly: false,
+		Secure:   secure,
 		SameSite: "Lax",
 		MaxAge:   -1,
 	})
