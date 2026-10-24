@@ -1,0 +1,6 @@
+@import "tailwindcss";
+
+/* [style] default border tailwind v4 = currentColor, ganti abu terang */
+@layer base {
+  *, ::after, ::before { border-color: var(--color-slate-200); }
+}
