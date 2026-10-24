@@ -91,6 +91,13 @@ ensure_db() {
     fi
   done
   printf " ready.\n"
+
+  if ! docker exec -e PGPASSWORD="$PG_PASSWORD" "$PG_CONTAINER" \
+    psql -h 127.0.0.1 -U "$PG_USER" -d "$PG_DB" -c 'SELECT 1' >/dev/null 2>&1; then
+    echo "Error: container $PG_CONTAINER exists but its credentials/database do not match." >&2
+    echo "Run '$0 db-down' and retry to recreate it." >&2
+    exit 1
+  fi
 }
 
 db_down() {
@@ -104,14 +111,14 @@ db_down() {
 
 test_unit() {
   echo "Running unit tests (integration tests are skipped)..."
-  (cd "$SERVER_DIR" && TEST_PG_DSN= go test ./... -count=1)
+  (cd "$SERVER_DIR" && TEST_PG_DSN= go test -p 1 ./... -count=1)
 }
 
 test_integration() {
   ensure_db
   echo "Running backend <-> database integration tests..."
   echo "TEST_PG_DSN=$PG_DSN"
-  (cd "$SERVER_DIR" && TEST_PG_DSN="$PG_DSN" go test ./... -count=1)
+  (cd "$SERVER_DIR" && TEST_PG_DSN="$PG_DSN" go test -p 1 ./... -count=1)
 }
 
 cleanup_api() {
@@ -149,7 +156,6 @@ start_api_server() {
     SESSION_HASH_KEY="$TEST_SESSION_HASH_KEY" \
     SESSION_BLOCK_KEY="$TEST_SESSION_BLOCK_KEY" \
     DB_ENC_KEY="$TEST_DB_ENC_KEY" \
-    DEV_AUTH=true \
     "$BIN_PATH" >"$API_TMP_DIR/server.log" 2>&1 &
   API_SERVER_PID=$!
 
@@ -174,24 +180,21 @@ start_api_server() {
 API_STATUS=""
 API_BODY=""
 
+# api_request METHOD PATH [BODY] [COOKIE_JAR] [CSRF_TOKEN]
 api_request() {
   METHOD="$1"
   PATH_SUFFIX="$2"
   BODY="${3:-}"
   JAR="${4:-}"
-  DEBUG_USER="${5:-}"
-  DEBUG_ADMIN="${6:-}"
+  CSRF="${5:-}"
   OUT="$API_TMP_DIR/body"
 
   set -- -sS -o "$OUT" -w '%{http_code}' -X "$METHOD" -H 'Content-Type: application/json'
   if [ -n "$JAR" ]; then
     set -- "$@" -b "$JAR" -c "$JAR"
   fi
-  if [ -n "$DEBUG_USER" ]; then
-    set -- "$@" -H "X-Debug-User: $DEBUG_USER"
-  fi
-  if [ -n "$DEBUG_ADMIN" ]; then
-    set -- "$@" -H "X-Debug-Admin: $DEBUG_ADMIN"
+  if [ -n "$CSRF" ]; then
+    set -- "$@" -H "X-CSRF-Token: $CSRF"
   fi
   if [ -n "$BODY" ]; then
     set -- "$@" -d "$BODY"
@@ -203,6 +206,15 @@ api_request() {
     API_STATUS="000"
   fi
   API_BODY=$(cat "$OUT" 2>/dev/null || true)
+}
+
+json_string() {
+  printf '%s' "$1" | sed -n "s/.*\"$2\":\"\([^\"]*\)\".*/\1/p" | head -n 1
+}
+
+jar_session() {
+  [ -f "$1" ] || return 0
+  awk '$6 == "session" { value = $7 } END { if (value != "") print value }' "$1"
 }
 
 API_PASS=0
@@ -252,6 +264,17 @@ check_not_contains() {
   fi
 }
 
+check_differs() {
+  DESCRIPTION="$1"
+  BEFORE="$2"
+  AFTER="$3"
+  if [ -n "$BEFORE" ] && [ -n "$AFTER" ] && [ "$BEFORE" != "$AFTER" ]; then
+    pass "$DESCRIPTION"
+  else
+    fail "$DESCRIPTION" "different values" "before=$BEFORE after=$AFTER" ""
+  fi
+}
+
 test_api() {
   ensure_db
   build_server
@@ -266,6 +289,8 @@ test_api() {
   # Keep going after a failed assertion so the report is complete.
   set +e
 
+  ADMIN_JAR="$API_TMP_DIR/admin.jar"
+  USER_JAR="$API_TMP_DIR/user.jar"
   echo ""
   echo "Running API smoke tests with curl..."
 
@@ -281,81 +306,180 @@ test_api() {
   check_status "GET /users/profile without session" 401 "$API_STATUS"
 
   ADMIN_LOGIN=$(printf '{"username":"%s","password":"%s"}' "$ADMIN_USER" "$ADMIN_PASS")
-  api_request POST /users/login "$ADMIN_LOGIN" "$API_TMP_DIR/admin.jar"
+  api_request POST /users/login "$ADMIN_LOGIN" "$ADMIN_JAR"
   check_status "POST /users/login (admin)" 200 "$API_STATUS"
   check_contains "login response contains admin user" "$API_BODY" "\"username\":\"$ADMIN_USER\""
   check_not_contains "login response hides password" "$API_BODY" "$ADMIN_PASS"
-  ADMIN_ID=$(printf '%s' "$API_BODY" | sed -n 's/.*"id":"\([0-9a-f-]\{36\}\)".*/\1/p' | head -n 1)
+  ADMIN_CSRF=$(json_string "$API_BODY" csrf_token)
+  if [ -n "$ADMIN_CSRF" ]; then
+    pass "login returns a csrf token"
+  else
+    fail "login returns a csrf token" "non-empty" "empty" "$API_BODY"
+  fi
 
-  api_request GET /users/profile "" "$API_TMP_DIR/admin.jar"
+  ROTATE_BEFORE=$(jar_session "$ADMIN_JAR")
+  api_request GET /users/profile "" "$ADMIN_JAR"
+  ROTATE_AFTER=$(jar_session "$ADMIN_JAR")
   check_status "GET /users/profile with session" 200 "$API_STATUS"
   check_contains "profile contains admin user" "$API_BODY" "\"username\":\"$ADMIN_USER\""
+  check_differs "session token rotates on authenticated request" "$ROTATE_BEFORE" "$ROTATE_AFTER"
+
+  api_request POST /admin/users '{"username":"no-csrf","password":"no-csrf-password"}' "$ADMIN_JAR"
+  check_status "POST /admin/users without csrf" 403 "$API_STATUS"
 
   USER_NAME="apiuser$$"
   USER_PASS="apiuser-password"
   CREATE_USER=$(printf '{"username":"%s","name":"API User","password":"%s"}' "$USER_NAME" "$USER_PASS")
 
-  api_request POST /admin/users "$CREATE_USER"
-  check_status "POST /admin/users without session" 401 "$API_STATUS"
-
-  api_request POST /admin/users "$CREATE_USER" "" "$ADMIN_ID" true
+  api_request POST /admin/users "$CREATE_USER" "$ADMIN_JAR" "$ADMIN_CSRF"
   check_status "POST /admin/users as admin" 201 "$API_STATUS"
   check_contains "created user has requested username" "$API_BODY" "\"username\":\"$USER_NAME\""
   check_not_contains "created user response hides password" "$API_BODY" "$USER_PASS"
+  USER_ID=$(json_string "$API_BODY" id)
 
-  api_request POST /admin/users "$CREATE_USER" "" "$ADMIN_ID" true
+  api_request POST /admin/users "$CREATE_USER" "$ADMIN_JAR" "$ADMIN_CSRF"
   check_status "POST /admin/users duplicate" 409 "$API_STATUS"
 
   USER_LOGIN=$(printf '{"username":"%s","password":"%s"}' "$USER_NAME" "$USER_PASS")
-  api_request POST /users/login "$USER_LOGIN" "$API_TMP_DIR/user.jar"
+  api_request POST /users/login "$USER_LOGIN" "$USER_JAR"
   check_status "POST /users/login (regular user)" 200 "$API_STATUS"
-  USER_ID=$(printf '%s' "$API_BODY" | sed -n 's/.*"id":"\([0-9a-f-]\{36\}\)".*/\1/p' | head -n 1)
+  USER_CSRF=$(json_string "$API_BODY" csrf_token)
+  USER_ID=$(json_string "$API_BODY" id)
 
-  api_request POST /admin/users "$CREATE_USER" "$API_TMP_DIR/user.jar" "$USER_ID"
+  api_request POST /admin/users "$CREATE_USER" "$USER_JAR" "$USER_CSRF"
   check_status "POST /admin/users as regular user" 403 "$API_STATUS"
 
   CONN_NAME="api_conn_$$"
   CONN_BODY=$(printf '{"name":"%s","host":"%s","port":%s,"db_name":"%s","username":"%s","password":"%s","ssl_mode":"disable"}' \
     "$CONN_NAME" "$TARGET_HOST" "$TARGET_PORT" "$TARGET_DB" "$TARGET_USER" "$TARGET_PASSWORD")
 
-  api_request GET /admin/connections "" "$API_TMP_DIR/user.jar" "$USER_ID"
+  api_request GET /admin/connections "" "$USER_JAR"
   check_status "GET /admin/connections as regular user" 403 "$API_STATUS"
 
-  api_request POST /admin/connections "$CONN_BODY" "" "$ADMIN_ID" true
+  api_request POST /admin/connections "$CONN_BODY" "$ADMIN_JAR" "$ADMIN_CSRF"
   check_status "POST /admin/connections as admin" 201 "$API_STATUS"
   check_contains "created connection has requested name" "$API_BODY" "\"name\":\"$CONN_NAME\""
   check_not_contains "connection response hides target password" "$API_BODY" "$TARGET_PASSWORD"
+  CONN_ID=$(json_string "$API_BODY" id)
 
-  CONN_ID=$(printf '%s' "$API_BODY" | sed -n 's/.*"id":"\([0-9a-f-]\{36\}\)".*/\1/p' | head -n 1)
   if [ -n "$CONN_ID" ]; then
     pass "created connection returns an id"
   else
     fail "created connection returns an id" "uuid" "missing" "$API_BODY"
   fi
 
-  if [ -n "$CONN_ID" ]; then
-    api_request POST "/admin/connections/$CONN_ID/test" "" "" "$ADMIN_ID" true
-    check_status "POST /admin/connections/:id/test" 200 "$API_STATUS"
-    check_contains "connection test returns server version" "$API_BODY" '"server_version"'
+  api_request GET /connections "" "$USER_JAR"
+  check_status "GET /connections as user without group access" 200 "$API_STATUS"
+  check_not_contains "unassigned connection is not visible" "$API_BODY" "$CONN_NAME"
 
-    api_request GET "/admin/connections/$CONN_ID" "" "" "$ADMIN_ID" true
+  GROUP_NAME="api_group_$$"
+  GROUP_BODY=$(printf '{"name":"%s","description":"API group"}' "$GROUP_NAME")
+  api_request POST /admin/groups "$GROUP_BODY" "$ADMIN_JAR" "$ADMIN_CSRF"
+  check_status "POST /admin/groups as admin" 201 "$API_STATUS"
+  GROUP_ID=$(json_string "$API_BODY" id)
+  if [ -n "$GROUP_ID" ]; then
+    pass "created group returns an id"
+  else
+    fail "created group returns an id" "uuid" "missing" "$API_BODY"
+  fi
+
+  if [ -n "$GROUP_ID" ]; then
+    api_request GET "/admin/groups/$GROUP_ID" "" "$ADMIN_JAR"
+    check_status "GET /admin/groups/:id" 200 "$API_STATUS"
+
+    MEMBER_BODY=$(printf '{"user_id":"%s"}' "$USER_ID")
+    api_request POST "/admin/groups/$GROUP_ID/members" "$MEMBER_BODY" "$ADMIN_JAR" "$ADMIN_CSRF"
+    check_status "POST /admin/groups/:id/members" 201 "$API_STATUS"
+
+    api_request GET "/admin/groups/$GROUP_ID/members" "" "$ADMIN_JAR"
+    check_status "GET /admin/groups/:id/members" 200 "$API_STATUS"
+    check_contains "member list contains user" "$API_BODY" "\"username\":\"$USER_NAME\""
+
+    if [ -n "$CONN_ID" ]; then
+      api_request PUT "/admin/groups/$GROUP_ID/connections/$CONN_ID" '{"level":"view"}' "$ADMIN_JAR" "$ADMIN_CSRF"
+      check_status "PUT group access level view" 200 "$API_STATUS"
+
+      api_request GET /connections "" "$USER_JAR"
+      check_status "GET /connections with view access" 200 "$API_STATUS"
+      check_contains "granted connection is visible" "$API_BODY" "$CONN_NAME"
+
+      api_request GET "/connections/$CONN_ID" "" "$USER_JAR"
+      check_status "GET /connections/:id with view access" 200 "$API_STATUS"
+
+      api_request PUT "/connections/$CONN_ID" "$CONN_BODY" "$USER_JAR" "$USER_CSRF"
+      check_status "PUT /connections/:id with view only" 404 "$API_STATUS"
+
+      api_request PUT "/admin/groups/$GROUP_ID/connections/$CONN_ID" '{"level":"edit"}' "$ADMIN_JAR" "$ADMIN_CSRF"
+      check_status "PUT group access level edit" 200 "$API_STATUS"
+
+      USER_UPDATE_CONN=$(printf '{"name":"%s-user","host":"%s","port":%s,"db_name":"%s","username":"%s","ssl_mode":"disable"}' \
+        "$CONN_NAME" "$TARGET_HOST" "$TARGET_PORT" "$TARGET_DB" "$TARGET_USER")
+      api_request PUT "/connections/$CONN_ID" "$USER_UPDATE_CONN" "$USER_JAR" "$USER_CSRF"
+      check_status "PUT /connections/:id with edit access" 200 "$API_STATUS"
+
+      api_request POST "/connections/$CONN_ID/test" "" "$USER_JAR" "$USER_CSRF"
+      check_status "POST /connections/:id/test with view access" 200 "$API_STATUS"
+      check_contains "connection test returns server version" "$API_BODY" '"server_version"'
+    fi
+
+    api_request DELETE "/admin/groups/$GROUP_ID/members/$USER_ID" "" "$ADMIN_JAR" "$ADMIN_CSRF"
+    check_status "DELETE group member" 204 "$API_STATUS"
+
+    if [ -n "$CONN_ID" ]; then
+      api_request GET "/connections/$CONN_ID" "" "$USER_JAR"
+      check_status "GET connection after membership removal" 404 "$API_STATUS"
+
+      api_request DELETE "/admin/groups/$GROUP_ID/connections/$CONN_ID" "" "$ADMIN_JAR" "$ADMIN_CSRF"
+      check_status "DELETE group access" 204 "$API_STATUS"
+    fi
+
+    api_request DELETE "/admin/groups/$GROUP_ID" "" "$ADMIN_JAR" "$ADMIN_CSRF"
+    check_status "DELETE group" 204 "$API_STATUS"
+  fi
+
+  if [ -n "$CONN_ID" ]; then
+    api_request GET "/admin/connections/$CONN_ID" "" "$ADMIN_JAR"
     check_status "GET /admin/connections/:id" 200 "$API_STATUS"
 
-    UPDATE_CONN=$(printf '{"name":"%s-updated","host":"%s","port":%s,"db_name":"%s","username":"%s","ssl_mode":"disable"}' \
-      "$CONN_NAME" "$TARGET_HOST" "$TARGET_PORT" "$TARGET_DB" "$TARGET_USER")
-    api_request PUT "/admin/connections/$CONN_ID" "$UPDATE_CONN" "" "$ADMIN_ID" true
-    check_status "PUT /admin/connections/:id" 200 "$API_STATUS"
-    check_contains "updated connection has new name" "$API_BODY" "${CONN_NAME}-updated"
+    api_request POST "/admin/connections/$CONN_ID/test" "" "$ADMIN_JAR" "$ADMIN_CSRF"
+    check_status "POST /admin/connections/:id/test" 200 "$API_STATUS"
 
-    api_request POST "/admin/connections/$CONN_ID/test" "" "" "$ADMIN_ID" true
-    check_status "connection still works after update" 200 "$API_STATUS"
-
-    api_request DELETE "/admin/connections/$CONN_ID" "" "" "$ADMIN_ID" true
+    api_request DELETE "/admin/connections/$CONN_ID" "" "$ADMIN_JAR" "$ADMIN_CSRF"
     check_status "DELETE /admin/connections/:id" 204 "$API_STATUS"
 
-    api_request GET "/admin/connections/$CONN_ID" "" "" "$ADMIN_ID" true
+    api_request GET "/admin/connections/$CONN_ID" "" "$ADMIN_JAR"
     check_status "GET deleted connection" 404 "$API_STATUS"
   fi
+
+  api_request GET /admin/users "" "$ADMIN_JAR"
+  check_status "GET /admin/users" 200 "$API_STATUS"
+  check_contains "user list contains created user" "$API_BODY" "\"username\":\"$USER_NAME\""
+
+  if [ -n "$USER_ID" ]; then
+    api_request GET "/admin/users/$USER_ID" "" "$ADMIN_JAR"
+    check_status "GET /admin/users/:id" 200 "$API_STATUS"
+
+    api_request PUT "/admin/users/$USER_ID" '{"name":"API User Updated"}' "$ADMIN_JAR" "$ADMIN_CSRF"
+    check_status "PUT /admin/users/:id" 200 "$API_STATUS"
+    check_contains "updated user has new name" "$API_BODY" '"name":"API User Updated"'
+  fi
+
+  api_request POST /users/logout "" "$USER_JAR" "$USER_CSRF"
+  check_status "POST /users/logout (regular user)" 204 "$API_STATUS"
+  api_request GET /users/profile "" "$USER_JAR"
+  check_status "profile after logout" 401 "$API_STATUS"
+
+  if [ -n "$USER_ID" ]; then
+    api_request DELETE "/admin/users/$USER_ID" "" "$ADMIN_JAR" "$ADMIN_CSRF"
+    check_status "DELETE /admin/users/:id" 204 "$API_STATUS"
+    api_request GET "/admin/users/$USER_ID" "" "$ADMIN_JAR"
+    check_status "GET deleted user" 404 "$API_STATUS"
+  fi
+
+  api_request POST /users/logout "" "$ADMIN_JAR" "$ADMIN_CSRF"
+  check_status "POST /users/logout (admin)" 204 "$API_STATUS"
+  api_request GET /users/profile "" "$ADMIN_JAR"
+  check_status "profile after admin logout" 401 "$API_STATUS"
 
   printf "\nAPI smoke tests: %d passed, %d failed\n" "$API_PASS" "$API_FAIL"
 
