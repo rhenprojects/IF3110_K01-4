@@ -2,9 +2,11 @@
 
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  field?: string; //[error] nama field yang gagal validasi (400)
+  constructor(status: number, message: string, field?: string) {
     super(message);
     this.status = status;
+    this.field = field;
   }
 }
 
@@ -26,12 +28,14 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
 
   if (!res.ok) {
     let msg = res.statusText;
+    let field: string | undefined;
     try {
       const body = await res.json();
       msg = body.error ?? body.message ?? msg;
+      field = body.field;
     } catch {
     }
-    throw new ApiError(res.status, msg);
+    throw new ApiError(res.status, msg, field);
   }
   return res.status === 204 ? (undefined as T) : ((await res.json()) as T);
 }

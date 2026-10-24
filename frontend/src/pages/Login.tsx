@@ -6,7 +6,7 @@ export default function Login() {
   const { user, login } = useAuth();
   const nav = useNavigate();
   const from = (useLocation().state as { from?: string } | null)?.from ?? "/databases";
-  const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -18,7 +18,7 @@ export default function Login() {
     setBusy(true);
     setError("");
     try {
-      await login(email, password);
+      await login(username, password);
       nav(from, { replace: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login gagal");
@@ -32,9 +32,9 @@ export default function Login() {
       <form onSubmit={submit} className="w-80 space-y-4 rounded-lg border bg-white p-6 shadow-sm">
         <h1 className="text-lg font-semibold">Masuk</h1>
         <label className="block text-sm">
-          Email
-          <input className="mt-1 w-full rounded border px-3 py-2" value={email}
-            onChange={(e) => setEmail(e.target.value)} autoComplete="username" required />
+          Username
+          <input className="mt-1 w-full rounded border px-3 py-2" value={username}
+            onChange={(e) => setUsername(e.target.value)} autoComplete="username" required />
         </label>
         <label className="block text-sm">
           Password

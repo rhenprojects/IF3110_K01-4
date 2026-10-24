@@ -13,7 +13,7 @@ export function RequireAuth() {
 //[guard] halaman admin, hanya UX (backend tetap cek)
 export function RequireAdmin() {
   const { user } = useAuth();
-  if (!user?.isAdmin) return <Navigate to="/forbidden" replace />;
+  if (!user?.is_admin) return <Navigate to="/forbidden" replace />;
   return <Outlet />;
 }
 
@@ -28,7 +28,7 @@ export function AppLayout() {
         <Link to="/" className="font-semibold">DB Platform</Link>
         <nav className="flex gap-1">
           <NavLink to="/databases" className={link}>Databases</NavLink>
-          {user?.isAdmin && <NavLink to="/admin" className={link}>Admin</NavLink>}
+          {user?.is_admin && <NavLink to="/admin" className={link}>Admin</NavLink>}
         </nav>
         <div className="ml-auto flex items-center gap-3 text-sm">
           <span className="text-slate-500">{user?.name}</span>

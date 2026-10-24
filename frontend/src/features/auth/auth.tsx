@@ -2,12 +2,13 @@ import { createContext, useContext, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError } from "../../lib/api";
 
-export type User = { id: string; name: string; email: string; isAdmin?: boolean };
+export type { User } from "../../lib/types";
+import type { User } from "../../lib/types";
 
 type AuthCtx = {
   user: User | null;
   loading: boolean;
-  login: (email: string, password: string) => Promise<void>;
+  login: (username: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
 };
 
@@ -32,7 +33,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   });
 
   const loginM = useMutation({
-    mutationFn: (v: { email: string; password: string }) =>
+    mutationFn: (v: { username: string; password: string }) =>
       api<{ user: User }>("/users/login", { method: "POST", body: JSON.stringify(v) }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["me"] }),
   });
@@ -47,7 +48,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       value={{
         user: me.data ?? null,
         loading: me.isLoading,
-        login: async (email, password) => void (await loginM.mutateAsync({ email, password })),
+        login: async (username, password) => void (await loginM.mutateAsync({ username, password })),
         logout: async () => void (await logoutM.mutateAsync()),
       }}
     >
