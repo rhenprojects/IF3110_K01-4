@@ -2,6 +2,7 @@ import { createBrowserRouter, Navigate } from "react-router-dom";
 import { AppLayout, RequireAdmin, RequireAuth } from "../components/Layout";
 import Login from "../pages/Login";
 import Forbidden from "../pages/Forbidden";
+import NotFound from "../pages/NotFound";
 import Placeholder from "../pages/Placeholder";
 import AdminLayout from "../pages/admin/AdminLayout";
 import Users from "../pages/admin/Users";
@@ -36,7 +37,7 @@ export const router = createBrowserRouter([
               },
             ],
           },
-          { path: "*", element: <Placeholder title="404" /> },
+          { path: "*", element: <NotFound /> },
         ],
       },
     ],

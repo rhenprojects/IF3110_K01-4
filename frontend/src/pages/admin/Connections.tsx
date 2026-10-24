@@ -2,13 +2,18 @@ import { useState, type FormEvent } from "react";
 import {
   useConnections, useCreateConnection, useDeleteConnection, useTestConnection, useUpdateConnection,
 } from "../../features/admin/hooks";
-import { Button, ErrorBox, Field, Modal, PageHeader, fieldError, generalError, inputCls, td, th } from "../../components/ui";
+import {
+  Button, ConfirmDialog, EmptyState, ErrorBox, Field, Loading, Modal, PageHeader, Table, fieldError, generalError, inputCls, td,
+} from "../../components/ui";
+import { useToast } from "../../components/toast";
+import { errorMessage } from "../../lib/errors";
 import type { Connection, ConnectionInput, SSLMode } from "../../lib/types";
 
 const FIELDS = ["name", "host", "port", "db_name", "username", "password", "ssl_mode"];
 const SSL: SSLMode[] = ["disable", "allow", "prefer", "require", "verify-ca", "verify-full"];
 
 function ConnectionForm({ conn, onClose }: { conn?: Connection; onClose: () => void }) {
+  const toast = useToast();
   const create = useCreateConnection();
   const update = useUpdateConnection();
   const test = useTestConnection();
@@ -25,6 +30,7 @@ function ConnectionForm({ conn, onClose }: { conn?: Connection; onClose: () => v
     try {
       if (conn) await update.mutateAsync({ id: conn.id, ...input() });
       else await create.mutateAsync(input());
+      toast.success(conn ? `Koneksi "${f.name}" diperbarui` : `Koneksi "${f.name}" dibuat`);
       onClose();
     } catch {
       //[error] ditampilkan lewat m.error
@@ -70,42 +76,57 @@ function ConnectionForm({ conn, onClose }: { conn?: Connection; onClose: () => v
 }
 
 export default function Connections() {
+  const toast = useToast();
   const conns = useConnections();
   const del = useDeleteConnection();
   const [form, setForm] = useState<Connection | "new" | null>(null);
+  const [toDelete, setToDelete] = useState<Connection | null>(null);
 
-  function remove(c: Connection) {
-    if (window.confirm(`Hapus koneksi "${c.name}"? Akses group ke database ini ikut terhapus.`)) del.mutate(c.id);
+  async function confirmDelete() {
+    if (!toDelete) return;
+    try {
+      await del.mutateAsync(toDelete.id);
+      toast.success(`Koneksi "${toDelete.name}" dihapus`);
+    } catch {
+      //[error] ditampilkan lewat del.error
+    } finally {
+      setToDelete(null);
+    }
   }
 
+  const add = <Button variant="primary" onClick={() => setForm("new")}>Tambah koneksi</Button>;
   return (
     <div>
-      <PageHeader title="Koneksi Database" action={<Button variant="primary" onClick={() => setForm("new")}>Tambah koneksi</Button>} />
-      <ErrorBox message={generalError(del.error, [])} />
-      {conns.isLoading && <p className="text-slate-500">Memuat…</p>}
-      {conns.error && <ErrorBox message={(conns.error as Error).message} />}
-      {conns.data?.length === 0 && <p className="text-slate-500">Belum ada koneksi.</p>}
+      <PageHeader title="Koneksi Database" action={add} />
+      <div className="mb-3"><ErrorBox message={generalError(del.error, [])} /></div>
+      {conns.isLoading && <Loading />}
+      {conns.error && <ErrorBox message={errorMessage(conns.error)} />}
+      {conns.data?.length === 0 && (
+        <EmptyState title="Belum ada koneksi" hint="Tambahkan koneksi ke database PostgreSQL yang ingin dikelola." action={add} />
+      )}
       {conns.data && conns.data.length > 0 && (
-        <table className="w-full overflow-hidden rounded border bg-white">
-          <thead className="bg-slate-50"><tr><th className={th}>Nama</th><th className={th}>Host</th><th className={th}>Database</th><th className={th}>User</th><th className={th}>SSL</th><th className={th} /></tr></thead>
-          <tbody className="divide-y">
-            {conns.data.map((c) => (
-              <tr key={c.id}>
-                <td className={td}>{c.name}</td>
-                <td className={td}>{c.host}:{c.port}</td>
-                <td className={td}>{c.db_name}</td>
-                <td className={td}>{c.username}</td>
-                <td className={td}>{c.ssl_mode}</td>
-                <td className={`${td} text-right`}>
-                  <Button onClick={() => setForm(c)}>Edit</Button>{" "}
-                  <Button variant="danger" onClick={() => remove(c)}>Hapus</Button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <Table columns={["Nama", "Host", "Database", "User", "SSL", ""]}>
+          {conns.data.map((c) => (
+            <tr key={c.id}>
+              <td className={td}>{c.name}</td>
+              <td className={td}>{c.host}:{c.port}</td>
+              <td className={td}>{c.db_name}</td>
+              <td className={td}>{c.username}</td>
+              <td className={td}>{c.ssl_mode}</td>
+              <td className={`${td} whitespace-nowrap text-right`}>
+                <Button onClick={() => setForm(c)}>Edit</Button>{" "}
+                <Button variant="danger" onClick={() => setToDelete(c)}>Hapus</Button>
+              </td>
+            </tr>
+          ))}
+        </Table>
       )}
       {form && <ConnectionForm conn={form === "new" ? undefined : form} onClose={() => setForm(null)} />}
+      {toDelete && (
+        <ConfirmDialog title="Hapus koneksi"
+          message={`Hapus koneksi "${toDelete.name}"? Akses group ke database ini ikut terhapus. Riwayat migration tetap tersimpan.`}
+          busy={del.isPending} onConfirm={confirmDelete} onClose={() => setToDelete(null)} />
+      )}
     </div>
   );
 }

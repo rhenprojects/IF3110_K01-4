@@ -1,9 +1,11 @@
 import { useState, type FormEvent } from "react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../features/auth/auth";
+import { ApiError } from "../lib/api";
+import { errorMessage } from "../lib/errors";
 
 export default function Login() {
-  const { user, login } = useAuth();
+  const { user, login, sessionExpired } = useAuth();
   const nav = useNavigate();
   const from = (useLocation().state as { from?: string } | null)?.from ?? "/databases";
   const [username, setUsername] = useState("");
@@ -21,7 +23,7 @@ export default function Login() {
       await login(username, password);
       nav(from, { replace: true });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Login gagal");
+      setError(err instanceof ApiError && err.status === 401 ? "Username atau password salah" : errorMessage(err));
     } finally {
       setBusy(false);
     }
@@ -41,6 +43,11 @@ export default function Login() {
           <input type="password" className="mt-1 w-full rounded border px-3 py-2" value={password}
             onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" required />
         </label>
+        {sessionExpired && !error && (
+          <p role="status" className="rounded bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            Sesi kamu telah berakhir. Silakan masuk lagi.
+          </p>
+        )}
         {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
         <button disabled={busy} className="w-full rounded bg-slate-900 py-2 text-white disabled:opacity-50">
           {busy ? "Masuk…" : "Masuk"}

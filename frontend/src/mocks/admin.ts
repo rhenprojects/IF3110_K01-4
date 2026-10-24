@@ -82,6 +82,7 @@ export const adminHandlers = [
     if (!u) return notFound("user");
     const bad = checkUser(body, false);
     if (bad) return bad;
+    if (id === currentUser()?.id && body.is_admin === false) return err(409, "cannot remove your own admin status");
     if (body.name) u.name = body.name.trim();
     if (body.password) u.password = body.password;
     if (typeof body.is_admin === "boolean") u.is_admin = body.is_admin;
@@ -100,6 +101,7 @@ export const adminHandlers = [
   http.post(`${P}/groups`, admin<GroupInput>(({ s, body }) => {
     const name = (body.name ?? "").trim();
     if (!name || name.length > 100) return err(400, "required, max 100 characters", "name");
+    if ((body.description ?? "").length > 255) return err(400, "max 255 characters", "description");
     if (s.groups.some((g) => g.name === name)) return err(409, "group name already exists");
     const g: Group = { id: uid(), name, description: body.description ?? "", member_ids: [], created_at: now(), updated_at: now() };
     s.groups.push(g);
@@ -110,6 +112,7 @@ export const adminHandlers = [
     if (!g) return notFound("group");
     const name = (body.name ?? "").trim();
     if (!name || name.length > 100) return err(400, "required, max 100 characters", "name");
+    if ((body.description ?? "").length > 255) return err(400, "max 255 characters", "description");
     if (s.groups.some((x) => x.id !== id && x.name === name)) return err(409, "group name already exists");
     g.name = name;
     g.description = body.description ?? g.description;
