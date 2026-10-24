@@ -24,3 +24,21 @@ type GroupMember struct {
 }
 
 func (GroupMember) TableName() string { return "group_members" }
+
+type CreateGroupRequest struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+type UpdateGroupRequest struct {
+	Name        *string `json:"name"`
+	Description *string `json:"description"`
+}
+
+type AddGroupMemberRequest struct {
+	UserID string `json:"user_id"`
+}
+
+type SetGroupAccessRequest struct {
+	Level string `json:"level"`
+}

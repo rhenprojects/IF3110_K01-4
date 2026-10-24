@@ -12,7 +12,6 @@ const (
 	AccessEdit AccessLevel = "edit"
 )
 
-
 type GroupDatabaseAccess struct {
 	GroupID      string      `json:"group_id" gorm:"column:group_id;type:uuid;primaryKey"`
 	ConnectionID string      `json:"connection_id" gorm:"column:connection_id;type:uuid;primaryKey;index"`
