@@ -1,12 +1,12 @@
 # Checklist Pengujian Backend Milestone 1
 
-Terakhir dijalankan: 2026-10-24
+Terakhir dijalankan: 2026-10-25
 
 Perintah:
 
 ```sh
 sh scripts/invoker.sh test-auth   # auth, session, authorization, user, group
-sh scripts/invoker.sh test-db     # koneksi PostgreSQL target dan akses
+sh scripts/invoker.sh test-db     # koneksi PostgreSQL target, akses, viewer, dan migration
 sh scripts/invoker.sh test-all    # unit + integration + API smoke
 ```
 
@@ -39,14 +39,13 @@ sh scripts/invoker.sh test-all    # unit + integration + API smoke
 | 18 | Enforcement View Only: user hanya bisa melihat dan test koneksi, update ditolak | `TestIntegrationUserConnectionAccess`, API smoke test | PASS |
 | 19 | Enforcement View + Edit: user bisa update koneksi | `TestIntegrationUserConnectionAccess`, API smoke test | PASS |
 | 20 | Unit dan integration test tersedia dan dapat dijalankan terpisah | `scripts/invoker.sh test-db` | PASS |
-| 21 | Viewer schema database target | Belum ada implementasi/service backend | FAIL |
-| 22 | Viewer data database target | Belum ada implementasi/service backend | FAIL |
-| 23 | Migration dalam transaction | Belum ada implementasi/service backend | FAIL |
-| 24 | Migration versi linear per koneksi | Belum ada implementasi/service backend | FAIL |
-| 25 | Riwayat migration | Belum ada implementasi/service backend | FAIL |
+| 21 | Viewer schema: schema, table/view, column (tipe, nullable, default, PK), constraint, index; read-only + statement timeout; schema sistem disembunyikan | `TestIntegrationSchema`, `TestIntegrationViewerAccessControl`, `TestTranslateTargetError` | PASS |
+| 22 | Viewer data: paging limit/offset + total, urut primary key, NULL/numeric/uuid, nama tabel dengan spasi, nama tabel injection ditolak, target tidak terjangkau | `TestIntegrationRows`, `TestIntegrationRowsRejectsUnknownAndInjectedTables`, `TestIntegrationUnreachableTarget`, `TestBuildRowsQueryQuotesIdentifiers`, `TestJSONValue` | PASS |
+| 23 | Migration dalam transaction: commit jika berhasil, rollback seluruh statement jika gagal, kegagalan dicatat | `TestIntegrationMigrationLifecycle`, `TestIntegrationMigrationRollbackOnFailure` | PASS |
+| 24 | Migration versi linear per koneksi: 1, 2, ...; migration gagal tidak memakai versi; tidak bisa diubah/dijalankan ulang; satu migration berjalan per koneksi | `TestIntegrationMigrationLifecycle`, `TestIntegrationMigrationRollbackOnFailure`, `TestLockForIsPerConnection` | PASS |
+| 25 | Riwayat migration: versi, SQL, pelaksana, waktu, durasi, status; View Only hanya bisa melihat; View + Edit bisa membuat/mengubah/menjalankan | `TestIntegrationMigrationLifecycle`, `TestIntegrationMigrationAccessControl`, `TestIntegrationMigrationValidationAndNotFound`, API smoke test | PASS |
 
 ## Ringkasan
 
-- PASS: 20
-- FAIL: 5
-- Catatan: item FAIL adalah fitur yang belum diimplementasikan di backend, bukan regresi Milestone 1. Item tersebut perlu dikerjakan sebelum test perilakunya bisa dibuat.
+- PASS: 25
+- FAIL: 0
