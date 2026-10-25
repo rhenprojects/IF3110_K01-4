@@ -1,0 +1,51 @@
+services:
+  backend:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: if3110-backend
+    ports:
+      - "9000:9000"
+    environment:
+      PORT: "9000"
+      DB_DSN: "host=db user=postgres password=postgres dbname=web_backend_db port=5432 sslmode=disable"
+      ADMIN_USERNAME: "admin"
+      ADMIN_PASSWORD: "admin-password"
+      SESSION_HASH_KEY: "hash-key-0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+      SESSION_BLOCK_KEY: "0123456789abcdef0123456789abcdef"
+      DB_ENC_KEY: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: if3110-frontend
+    ports:
+      - "80:80"
+      - "5173:80"
+    depends_on:
+      - backend
+
+  db:
+    image: postgres:16-alpine
+    container_name: if3110-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: web_backend_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d web_backend_db"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pgdata:
+
