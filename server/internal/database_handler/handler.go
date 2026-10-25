@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"log"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -105,7 +106,11 @@ func (h *Handler) Schema(c *fiber.Ctx) error {
 	if err != nil {
 		return h.writeError(c, err)
 	}
-	schemas, err := readSchema(c.UserContext(), pool)
+	var schemas []models.SchemaInfo
+	err = readOnly(c.UserContext(), pool, func(q querier) (err error) {
+		schemas, err = readSchema(c.UserContext(), q)
+		return err
+	})
 	if err != nil {
 		return h.writeError(c, err)
 	}
@@ -119,11 +124,20 @@ func (h *Handler) Rows(c *fiber.Ctx) error {
 	}
 	limit := queryInt(c.Query("limit"), 50, 1, 200)
 	offset := queryInt(c.Query("offset"), 0, 0, 1<<31-1)
+	schema, errSchema := url.PathUnescape(c.Params("schema"))
+	table, errTable := url.PathUnescape(c.Params("table"))
+	if errSchema != nil || errTable != nil {
+		return h.writeError(c, ErrTableNotFound)
+	}
 	pool, err := h.pool(c, conn.ID)
 	if err != nil {
 		return h.writeError(c, err)
 	}
-	result, err := readRows(c.UserContext(), pool, c.Params("schema"), c.Params("table"), limit, offset)
+	var result *models.RowsResponse
+	err = readOnly(c.UserContext(), pool, func(q querier) (err error) {
+		result, err = readRows(c.UserContext(), q, schema, table, limit, offset)
+		return err
+	})
 	if err != nil {
 		return h.writeError(c, err)
 	}
@@ -293,19 +307,26 @@ func (h *Handler) ExecuteMigration(c *fiber.Ctx) error {
 		return c.JSON(migration)
 	}
 
-	if err := tx.Commit(c.UserContext()); err != nil {
-		_ = tx.Rollback(c.UserContext())
-		return h.writeError(c, err)
-	}
-
 	version, err := h.nextVersion(c.UserContext(), conn.ID)
 	if err != nil {
+		_ = tx.Rollback(context.Background())
 		return h.writeError(c, err)
 	}
 	migration.Status = models.MigrationSuccess
 	migration.Error = ""
 	migration.Version = &version
 	if err := h.db.WithContext(c.UserContext()).Save(migration).Error; err != nil {
+		_ = tx.Rollback(context.Background())
+		return h.writeError(c, err)
+	}
+
+	if err := tx.Commit(c.UserContext()); err != nil {
+		migration.Status = models.MigrationFailed
+		migration.Error = "commit failed: " + err.Error()
+		migration.Version = nil
+		if saveErr := h.db.WithContext(context.Background()).Save(migration).Error; saveErr != nil {
+			log.Printf("[database] migration %s: commit failed and status could not be saved: %v", migration.ID, saveErr)
+		}
 		return h.writeError(c, err)
 	}
 	if err := h.attachUserNames(c.UserContext(), []*models.Migration{migration}); err != nil {
@@ -453,6 +474,15 @@ func (h *Handler) writeError(c *fiber.Ctx, err error) error {
 		return httpx.Error(c, fiber.StatusForbidden, err.Error())
 	case errors.Is(err, ErrTableNotFound):
 		return httpx.Error(c, fiber.StatusNotFound, ErrTableNotFound.Error())
+	case errors.Is(err, ErrTargetPermission):
+		log.Printf("[database] %v", err)
+		return httpx.Error(c, fiber.StatusForbidden, ErrTargetPermission.Error())
+	case errors.Is(err, ErrQueryTimeout):
+		log.Printf("[database] %v", err)
+		return httpx.Error(c, fiber.StatusGatewayTimeout, ErrQueryTimeout.Error())
+	case errors.Is(err, ErrQueryFailed):
+		log.Printf("[database] %v", err)
+		return httpx.Error(c, fiber.StatusBadGateway, ErrQueryFailed.Error())
 	case errors.Is(err, ErrMigrationNotFound):
 		return httpx.Error(c, fiber.StatusNotFound, ErrMigrationNotFound.Error())
 	case errors.Is(err, ErrMigrationNotDraft):
