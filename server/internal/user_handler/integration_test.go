@@ -31,10 +31,18 @@ func setup(t *testing.T) (*fiber.App, *gorm.DB) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	if err := db.Migrator().DropTable(&models.Session{}, &models.User{}); err != nil {
+	// Semua tabel yang ber-foreign key ke users ikut dihapus; kalau tidak, baris
+	// group_members sisa test lain membuat AutoMigrate (termasuk saat server start) gagal.
+	if err := db.Migrator().DropTable(
+		&models.Session{}, &models.Migration{}, &models.GroupDatabaseAccess{}, &models.GroupMember{},
+		&models.Group{}, &models.DBConnection{}, &models.User{},
+	); err != nil {
 		t.Fatalf("drop tables: %v", err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.Session{}); err != nil {
+	if err := db.AutoMigrate(
+		&models.User{}, &models.Group{}, &models.GroupMember{}, &models.Session{},
+		&models.DBConnection{}, &models.GroupDatabaseAccess{}, &models.Migration{},
+	); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	userhandler.InitSession(db, nil, nil)

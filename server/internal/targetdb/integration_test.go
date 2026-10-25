@@ -44,12 +44,17 @@ func setup(t *testing.T) *testEnv {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	if err := db.Migrator().DropTable(&models.DBConnection{}); err != nil {
+	// Semua tabel yang saling ber-foreign key dihapus bersama (seperti test authz dan
+	// group_handler); sisa baris dari package lain membuat foreign key gagal dibuat ulang.
+	if err := db.Migrator().DropTable(
+		&models.Session{}, &models.Migration{}, &models.GroupDatabaseAccess{}, &models.GroupMember{},
+		&models.Group{}, &models.DBConnection{}, &models.User{},
+	); err != nil {
 		t.Fatalf("drop table: %v", err)
 	}
 	if err := db.AutoMigrate(
-		&models.DBConnection{}, &models.User{}, &models.Group{},
-		&models.GroupMember{}, &models.GroupDatabaseAccess{},
+		&models.User{}, &models.Group{}, &models.GroupMember{}, &models.Session{},
+		&models.DBConnection{}, &models.GroupDatabaseAccess{}, &models.Migration{},
 	); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
