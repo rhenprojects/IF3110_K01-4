@@ -1,6 +1,7 @@
 # Database Management Platform — IF3110 K01-4
 
-Tugas Besar IF3110 Pengembangan Aplikasi Web, Milestone 1.
+<img width="1920" height="1080" alt="dbPlatform (1)" src="https://github.com/user-attachments/assets/b205f0e6-68a2-49c0-bacc-1b0be9ef5ae4" />
+
 
 Platform untuk mengelola akses ke database PostgreSQL bersama: pengguna masuk, melihat schema dan data database yang boleh diaksesnya, lalu membuat dan menjalankan migration secara terkontrol dengan riwayat yang tercatat.
 
