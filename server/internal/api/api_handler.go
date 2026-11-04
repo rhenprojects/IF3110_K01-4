@@ -13,8 +13,15 @@ import (
 	"gorm.io/gorm"
 )
 
+var benchRawBody = []byte(`{"status":"ok"}`)
+
 func SetupRoutes(app *fiber.App, db *gorm.DB, connService *targetdb.Service, devAuth bool) {
 	api := app.Group("/api/v1")
+
+	api.Get("/bench-raw", func(c *fiber.Ctx) error {
+		c.Set(fiber.HeaderContentType, fiber.MIMEApplicationJSON)
+		return c.Send(benchRawBody)
+	})
 
 	api.Get("/health", func(c *fiber.Ctx) error {
 		dbStatus := "connected"

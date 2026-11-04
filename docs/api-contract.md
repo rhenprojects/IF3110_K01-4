@@ -15,6 +15,7 @@ Isi dokumen:
 8. Database untuk user biasa (daftar, schema, data)
 9. Migration
 10. Tabel izin ringkas
+11. Benchmark
 
 ---
 
@@ -473,3 +474,15 @@ Kenapa SQL gagal tetap `200`? Karena permintaannya sendiri sudah diproses dengan
 | Buat, ubah, jalankan migration | ❌ | ❌ | ❌ | ✅ | ❌ |
 
 Catatan: user yang admin **dan** anggota group dengan akses `edit` mendapat izin `edit` lewat group-nya, bukan karena admin (bagian 3.5).
+
+---
+
+## 11. Benchmark
+
+`GET /bench-raw` dipakai untuk mengukur performa mentah backend: tanpa session, CSRF, autentikasi, atau query database. Response selalu `200`:
+
+```json
+{ "status": "ok" }
+```
+
+Karena tidak menyentuh database, hasil pengukuran hanya mencerminkan overhead HTTP dan serialisasi JSON backend. Untuk pengujian lokal lewat Docker, backend dipublikasikan di port `9000` (host port bisa diubah lewat `BACKEND_PORT`).

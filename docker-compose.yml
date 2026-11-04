@@ -5,7 +5,7 @@ services:
       dockerfile: Dockerfile
     container_name: if3110-backend
     ports:
-      - "9000:9000"
+      - "${BACKEND_PORT:-9000}:9000"
     environment:
       PORT: "9000"
       DB_DSN: "host=db user=postgres password=postgres dbname=web_backend_db port=5432 sslmode=disable"
