@@ -38,6 +38,8 @@ func main() {
 			&models.DBConnection{},
 			&models.GroupDatabaseAccess{},
 			&models.Migration{},
+			&models.MigrationBatch{},
+			&models.MigrationBatchItem{},
 		); err != nil {
 			log.Printf("[WARN] Gagal melakukan migrasi database: %v", err)
 		}
