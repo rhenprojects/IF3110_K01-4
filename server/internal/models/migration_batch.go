@@ -34,7 +34,9 @@ type MigrationBatch struct {
 	CreatedAt       time.Time   `json:"created_at" gorm:"column:created_at;type:timestamptz;not null;default:CURRENT_TIMESTAMP;index:idx_migration_batches_connection_created,priority:2,sort:desc"`
 	UpdatedAt       time.Time   `json:"updated_at" gorm:"column:updated_at;type:timestamptz;not null;default:CURRENT_TIMESTAMP"`
 
-	ExecutionCount int `json:"execution_count" gorm:"-"`
+	ExecutionCount  int     `json:"execution_count" gorm:"-"`
+	CreatedByName   string  `json:"created_by_name,omitempty" gorm:"-"`
+	CancelledByName *string `json:"cancelled_by_name,omitempty" gorm:"-"`
 
 	Connection DBConnection `json:"-" gorm:"foreignKey:ConnectionID;constraint:OnDelete:RESTRICT"`
 }
@@ -78,8 +80,8 @@ type MigrationBatchItem struct {
 	CreatedAt          time.Time          `json:"created_at" gorm:"column:created_at;type:timestamptz;not null;default:CURRENT_TIMESTAMP"`
 	UpdatedAt          time.Time          `json:"updated_at" gorm:"column:updated_at;type:timestamptz;not null;default:CURRENT_TIMESTAMP"`
 
-	MigrationName string `json:"migration_name,omitempty" gorm:"-"`
-	MigrationSQL  string `json:"-" gorm:"-"`
+	MigrationName string `json:"migration_name,omitempty" gorm:"column:migration_name;->;-:migration"`
+	MigrationSQL  string `json:"-" gorm:"column:migration_sql;->;-:migration"`
 
 	Batch     MigrationBatch `json:"-" gorm:"foreignKey:BatchID;constraint:OnDelete:CASCADE"`
 	Migration *Migration     `json:"-" gorm:"foreignKey:MigrationID;constraint:OnDelete:RESTRICT"`
