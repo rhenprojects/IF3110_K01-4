@@ -1,4 +1,4 @@
-import type { AccessEntry, Connection, Group, Migration, User } from "../lib/types";
+import type { AccessEntry, BatchItem, Connection, Group, Migration, MigrationBatch, User } from "../lib/types";
 import { seedTargets, type Target } from "./target";
 
 export type StoredUser = User & { password: string };
@@ -8,7 +8,9 @@ export type Store = {
   connections: Connection[];
   access: Record<string, AccessEntry[]>; //[access] key = group id
   targets: Record<string, Target>; //[target] key = connection id: isi database target palsu
-  migrations: Record<string, Migration[]>; //[migration] key = connection id, urut dari yang terbaru dibuat
+  migrations: Record<string, Migration[]>;
+  batches: MigrationBatch[];
+  batchItems: Record<string, BatchItem[]>; //[batch] key = batch id
 };
 
 const KEY = "mock_db";
@@ -37,6 +39,8 @@ const seed = (): Store => ({
   },
   targets: seedTargets(),
   migrations: seedMigrations(),
+  batches: [],
+  batchItems: {},
 });
 
 //[mock] riwayat awal agar halaman migration tidak kosong saat demo (urut terbaru dibuat dulu)

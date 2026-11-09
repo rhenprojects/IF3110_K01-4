@@ -9,6 +9,8 @@ import DatabaseViewer from "../pages/databases/DatabaseViewer";
 import MigrationList from "../pages/databases/MigrationList";
 import MigrationDetail from "../pages/databases/MigrationDetail";
 import MigrationEditor from "../pages/databases/MigrationEditor";
+import BatchList from "../pages/databases/BatchList";
+import BatchDetail from "../pages/databases/BatchDetail";
 import AdminLayout from "../pages/admin/AdminLayout";
 import Users from "../pages/admin/Users";
 import Groups from "../pages/admin/Groups";
@@ -31,6 +33,8 @@ export const router = createBrowserRouter([
               { index: true, element: <DatabaseViewer /> },
               { path: "migrations", element: <MigrationList /> },
               { path: "migrations/new", element: <MigrationEditor /> },
+              { path: "migrations/batches", element: <BatchList /> },
+              { path: "migrations/batches/:bid", element: <BatchDetail /> },
               { path: "migrations/:mid", element: <MigrationDetail /> },
               { path: "migrations/:mid/edit", element: <MigrationEditor /> },
             ],

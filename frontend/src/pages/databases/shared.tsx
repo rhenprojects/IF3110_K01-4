@@ -2,7 +2,7 @@ import { Link, useOutletContext } from "react-router-dom";
 import { Badge, Button } from "../../components/ui";
 import { ApiError } from "../../lib/api";
 import { errorMessage, isConnectionError } from "../../lib/errors";
-import type { AccessLevel, DatabaseItem, MigrationStatus } from "../../lib/types";
+import type { AccessLevel, BatchStatus, DatabaseItem, MigrationStatus } from "../../lib/types";
 
 //[context] database yang sedang dibuka, disediakan DatabaseLayout lewat <Outlet context>
 export const useDb = () => useOutletContext<DatabaseItem>();
@@ -20,6 +20,18 @@ const STATUS: Record<MigrationStatus, { tone: "amber" | "green" | "red"; label: 
 };
 export function StatusBadge({ status }: { status: MigrationStatus }) {
   return <Badge tone={STATUS[status].tone}>{STATUS[status].label}</Badge>;
+}
+
+const BATCH: Record<BatchStatus, { tone: "neutral" | "dark" | "green" | "red" | "amber"; label: string }> = {
+  queued: { tone: "neutral", label: "Menunggu" },
+  running: { tone: "dark", label: "Berjalan" },
+  success: { tone: "green", label: "Berhasil" },
+  partial: { tone: "amber", label: "Sebagian gagal" },
+  failed: { tone: "red", label: "Gagal" },
+  cancelled: { tone: "amber", label: "Dibatalkan" },
+};
+export function BatchStatusBadge({ status }: { status: BatchStatus }) {
+  return <Badge tone={BATCH[status].tone}>{BATCH[status].label}</Badge>;
 }
 
 //[error] satu tampilan untuk 403 / 404 / 502 / 504 agar semua halaman database konsisten

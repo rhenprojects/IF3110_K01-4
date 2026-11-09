@@ -93,3 +93,46 @@ export type Migration = {
   duration_ms: number | null;
 };
 export type MigrationInput = { name: string; sql: string };
+
+//[batch] eksekusi sekumpulan draft migration secara berurutan (docs/api-contract.md bagian 9)
+export type BatchStatus = "queued" | "running" | "success" | "partial" | "failed" | "cancelled";
+export type BatchItemStatus = "pending" | "running" | "success" | "failed" | "skipped";
+export type CompensationStatus = "none" | "retained" | "rolled_back";
+export type MigrationBatch = {
+  id: string;
+  connection_id: string;
+  status: BatchStatus;
+  total: number;
+  processed: number;
+  failed: number;
+  cancel_requested: boolean;
+  created_by: string;
+  created_by_name?: string;
+  cancelled_by: string | null;
+  cancelled_by_name?: string | null;
+  error: string;
+  heartbeat_at: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  created_at: string;
+  updated_at: string;
+  execution_count: number;
+};
+export type BatchItem = {
+  id: number;
+  batch_id: string;
+  migration_id: string;
+  migration_name?: string;
+  attempt: number;
+  execution_id: string;
+  status: BatchItemStatus;
+  error: string;
+  compensation_status: CompensationStatus;
+  compensated_at: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  duration_ms: number | null;
+  created_at: string;
+  updated_at: string;
+};
+export type Execution = BatchItem;
