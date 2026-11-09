@@ -76,5 +76,7 @@ func SetupRoutes(app *fiber.App, db *gorm.DB, connService *targetdb.Service, dev
 	connHandler.RegisterUserRoutes(api, middleware...)
 
 	grouphandler.NewGroupHandler(db).RegisterRoutes(api, middleware...)
-	databasehandler.NewHandler(db, connService).RegisterRoutes(api, middleware...)
+	dbHandler := databasehandler.NewHandler(db, connService)
+	dbHandler.RegisterRoutes(api, middleware...)
+	dbHandler.RegisterBatchRoutes(api, middleware...)
 }
