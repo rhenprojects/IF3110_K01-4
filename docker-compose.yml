@@ -6,8 +6,10 @@ services:
     container_name: if3110-backend
     ports:
       - "${BACKEND_PORT:-9000}:9000"
+      - "${METRICS_PORT:-9101}:9101"
     environment:
       PORT: "9000"
+      METRICS_ADDR: "0.0.0.0:9101"
       DB_DSN: "host=db user=postgres password=postgres dbname=web_backend_db port=5432 sslmode=disable"
       ADMIN_USERNAME: "admin"
       ADMIN_PASSWORD: "admin-password"
@@ -28,6 +30,32 @@ services:
       - "5173:80"
     depends_on:
       - backend
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: if3110-prometheus
+    command: ["--config.file=/etc/prometheus/prometheus.yml"]
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      - backend
+
+  grafana:
+    image: grafana/grafana:11.3.1
+    container_name: if3110-grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
 
   db:
     image: postgres:16-alpine

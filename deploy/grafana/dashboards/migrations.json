@@ -1,0 +1,63 @@
+{
+  "uid": "batch-migrations",
+  "title": "Batch Migrations",
+  "tags": ["if3110", "migrations"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "10s",
+  "time": { "from": "now-30m", "to": "now" },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Batch selesai per status",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "sum by (status) (rate(migration_batch_total[5m]))", "legendFormat": "{{status}}" }]
+    },
+    {
+      "type": "timeseries",
+      "title": "Item selesai per status",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "sum by (status) (rate(migration_batch_items_total[5m]))", "legendFormat": "{{status}}" }]
+    },
+    {
+      "type": "timeseries",
+      "title": "Durasi item p50 / p95",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, sum by (le) (rate(migration_item_duration_seconds_bucket[5m])))", "legendFormat": "p50" },
+        { "expr": "histogram_quantile(0.95, sum by (le) (rate(migration_item_duration_seconds_bucket[5m])))", "legendFormat": "p95" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Durasi batch p95",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "histogram_quantile(0.95, sum by (le) (rate(migration_batch_duration_seconds_bucket[5m])))", "legendFormat": "p95" }]
+    },
+    {
+      "type": "stat",
+      "title": "Total batch",
+      "gridPos": { "h": 5, "w": 8, "x": 0, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "sum(migration_batch_total)", "instant": true }]
+    },
+    {
+      "type": "stat",
+      "title": "Batch gagal + sebagian",
+      "gridPos": { "h": 5, "w": 8, "x": 8, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "sum(migration_batch_total{status=~\"failed|partial\"})", "instant": true }]
+    },
+    {
+      "type": "stat",
+      "title": "Item sukses",
+      "gridPos": { "h": 5, "w": 8, "x": 16, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "sum(migration_batch_items_total{status=\"success\"})", "instant": true }]
+    }
+  ]
+}

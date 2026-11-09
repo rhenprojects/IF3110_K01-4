@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 	"web_backend/internal/models"
+	"web_backend/internal/observability"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -173,6 +174,7 @@ func (c *Coordinator) runItem(ctx context.Context, b *models.MigrationBatch, ite
 	if err := c.store.FinishItem(ctx, item.ID, status, outcome.Error, outcome.DurationMs, c.now()); err != nil {
 		return models.BatchItemFailed, err
 	}
+	observability.ObserveItem(string(status), outcome.DurationMs)
 	return status, nil
 }
 
@@ -192,7 +194,13 @@ func (c *Coordinator) finish(ctx context.Context, b *models.MigrationBatch, proc
 	}
 	if err := c.store.Finish(ctx, b.ID, status, errMsg, now); err != nil {
 		log.Printf("[batch] finish %s: %v", b.ID, err)
+		return
 	}
+	var elapsed time.Duration
+	if b.StartedAt != nil {
+		elapsed = now.Sub(*b.StartedAt)
+	}
+	observability.ObserveBatch(string(status), elapsed)
 }
 
 func (c *Coordinator) cancelled(ctx context.Context, batchID string) (bool, error) {

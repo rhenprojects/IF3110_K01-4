@@ -3,11 +3,13 @@ package main
 import (
 	"context"
 	"log"
+	"net/http"
 	"os"
 	"strings"
 	"web_backend/internal/api"
 	"web_backend/internal/database_handler"
 	"web_backend/internal/models"
+	"web_backend/internal/observability"
 	"web_backend/internal/targetdb"
 	userhandler "web_backend/internal/user_handler"
 
@@ -76,6 +78,17 @@ func main() {
 		} else if recovered > 0 {
 			log.Printf("Memulihkan %d batch migration yang terhenti", recovered)
 		}
+	}
+
+	if addr := strings.TrimSpace(os.Getenv("METRICS_ADDR")); addr != "" {
+		go func() {
+			log.Printf("Metrik Prometheus tersedia pada http://%s/metrics", addr)
+			mux := http.NewServeMux()
+			mux.Handle("/metrics", observability.Handler())
+			if err := http.ListenAndServe(addr, mux); err != nil {
+				log.Printf("[WARN] Server metrik berhenti: %v", err)
+			}
+		}()
 	}
 
 	devAuth := os.Getenv("DEV_AUTH") == "true"
