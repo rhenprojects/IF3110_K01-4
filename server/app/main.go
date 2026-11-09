@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"log"
 	"os"
 	"strings"
 	"web_backend/internal/api"
+	"web_backend/internal/database_handler"
 	"web_backend/internal/models"
 	"web_backend/internal/targetdb"
 	userhandler "web_backend/internal/user_handler"
@@ -68,6 +70,12 @@ func main() {
 	var connService *targetdb.Service
 	if db != nil {
 		connService = targetdb.NewService(db, connCipher, targetdb.NewPoolManager())
+		coordinator := databasehandler.NewHandler(db, connService).NewBatchCoordinator()
+		if recovered, err := coordinator.Recover(context.Background()); err != nil {
+			log.Printf("[WARN] Gagal memulihkan batch migration: %v", err)
+		} else if recovered > 0 {
+			log.Printf("Memulihkan %d batch migration yang terhenti", recovered)
+		}
 	}
 
 	devAuth := os.Getenv("DEV_AUTH") == "true"
