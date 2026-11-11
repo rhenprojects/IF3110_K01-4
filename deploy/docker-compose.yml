@@ -33,16 +33,30 @@ services:
     depends_on:
       - backend
 
+  certs:
+    image: alpine:3.20
+    container_name: if3110-certs
+    command: ["sh", "-c", "apk add --no-cache openssl >/dev/null && sh /gen-certs.sh"]
+    volumes:
+      - ./certs/gen-certs.sh:/gen-certs.sh:ro
+      - tlscerts:/certs
+    restart: "no"
+
   prometheus:
     image: prom/prometheus:v2.55.1
     container_name: if3110-prometheus
-    command: ["--config.file=/etc/prometheus/prometheus.yml"]
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--web.config.file=/etc/prometheus/web.yml"]
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/web.yml:/etc/prometheus/web.yml:ro
+      - tlscerts:/certs:ro
     ports:
       - "9090:9090"
     depends_on:
-      - backend
+      backend:
+        condition: service_started
+      certs:
+        condition: service_completed_successfully
 
   grafana:
     image: grafana/grafana:11.3.1
@@ -51,13 +65,20 @@ services:
       GF_SECURITY_ADMIN_USER: admin
       GF_SECURITY_ADMIN_PASSWORD: admin
       GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SERVER_PROTOCOL: https
+      GF_SERVER_CERT_FILE: /certs/server.crt
+      GF_SERVER_CERT_KEY: /certs/server.key
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - tlscerts:/certs:ro
     ports:
       - "3000:3000"
     depends_on:
-      - prometheus
+      prometheus:
+        condition: service_started
+      certs:
+        condition: service_completed_successfully
 
   db:
     image: postgres:16-alpine
@@ -78,4 +99,5 @@ services:
 
 volumes:
   pgdata:
+  tlscerts:
 

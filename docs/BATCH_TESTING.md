@@ -139,7 +139,9 @@ curl -sS http://localhost:9101/metrics | grep '^migration_'
 | `migration_item_duration_seconds` | histogram | `status` |
 | `migration_batch_duration_seconds` | histogram | — |
 
-Grafana: <http://localhost:3000> (admin/admin), dashboard **Batch Migrations**. Prometheus: <http://localhost:9090>.
+Grafana: <https://localhost:3000> (admin/admin), dashboard **Batch Migrations**. Prometheus: <https://localhost:9090>.
+
+Keduanya memakai self-signed certificate; browser akan menampilkan peringatan sampai CA lokal dipercaya. Grafana terhubung ke Prometheus lewat HTTPS internal dengan `tlsSkipVerify` untuk development.
 
 ## 7. Batasan yang diketahui
 
