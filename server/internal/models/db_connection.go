@@ -15,6 +15,7 @@ type DBConnection struct {
 	Username    string         `json:"username" gorm:"column:username;type:varchar(100);not null"`
 	PasswordEnc []byte         `json:"-" gorm:"column:password_enc;type:bytea;not null"`
 	SSLMode     string         `json:"ssl_mode" gorm:"column:ssl_mode;type:varchar(20);not null;default:'prefer'"`
+	SSLRootCert string         `json:"ssl_root_cert" gorm:"column:ssl_root_cert;type:text;not null;default:''"`
 	CreatedBy   string         `json:"created_by" gorm:"column:created_by;type:varchar(64)"`
 	CreatedAt   time.Time      `json:"created_at" gorm:"column:created_at;type:timestamptz;not null;default:CURRENT_TIMESTAMP"`
 	UpdatedAt   time.Time      `json:"updated_at" gorm:"column:updated_at;type:timestamptz;not null;default:CURRENT_TIMESTAMP"`

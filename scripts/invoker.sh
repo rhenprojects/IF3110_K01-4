@@ -664,6 +664,10 @@ case "$1" in
     test_e2e
     ;;
 
+  test-ssl)
+    bash "$ROOT_DIR/scripts/ssl-invoker.sh"
+    ;;
+
   test-all)
     test_unit
     test_integration
@@ -684,7 +688,7 @@ case "$1" in
     ;;
 
   *)
-    echo "Usage: $0 {build|run|dev|test [json]|test-unit|test-integration|test-auth|test-db|test-frontend|test-api|test-e2e|test-all|db-up|db-down|clean}"
+    echo "Usage: $0 {build|run|dev|test [json]|test-unit|test-integration|test-auth|test-db|test-frontend|test-api|test-e2e|test-ssl|test-all|db-up|db-down|clean}"
     echo ""
     echo "  test               Smoke-test /api/v1/test (legacy)."
     echo "  test-unit          Run unit tests only."
@@ -694,6 +698,7 @@ case "$1" in
     echo "  test-frontend      Typecheck and build the React frontend."
     echo "  test-api           Start PostgreSQL + backend, then run API contract tests."
     echo "  test-e2e           Run the same contract tests through the Vite proxy (frontend <-> backend <-> database)."
+    echo "  test-ssl           Run TLS verify-full test with a disposable PostgreSQL container."
     echo "  test-all           Run unit, integration, and API tests."
     echo "  db-up / db-down    Start / remove the test PostgreSQL container."
     echo ""

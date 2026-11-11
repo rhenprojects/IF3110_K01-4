@@ -44,8 +44,9 @@ sh scripts/invoker.sh test-all    # unit + integration + API smoke
 | 23 | Migration dalam transaction: commit jika berhasil, rollback seluruh statement jika gagal, kegagalan dicatat | `TestIntegrationMigrationLifecycle`, `TestIntegrationMigrationRollbackOnFailure` | PASS |
 | 24 | Migration versi linear per koneksi: 1, 2, ...; migration gagal tidak memakai versi; tidak bisa diubah/dijalankan ulang; satu migration berjalan per koneksi | `TestIntegrationMigrationLifecycle`, `TestIntegrationMigrationRollbackOnFailure`, `TestLockForIsPerConnection` | PASS |
 | 25 | Riwayat migration: versi, SQL, pelaksana, waktu, durasi, status; View Only hanya bisa melihat; View + Edit bisa membuat/mengubah/menjalankan | `TestIntegrationMigrationLifecycle`, `TestIntegrationMigrationAccessControl`, `TestIntegrationMigrationValidationAndNotFound`, API smoke test | PASS |
+| 26 | TLS target: `verify-full`/`verify-ca` dengan CA custom; CA ditolak untuk mode lain; `verify-full` tanpa CA gagal | `TestNormalizeSSLRootCert`, `TestApplySSLRootCert`, `scripts/invoker.sh test-ssl` | PASS |
 
 ## Ringkasan
 
-- PASS: 25
+- PASS: 26
 - FAIL: 0

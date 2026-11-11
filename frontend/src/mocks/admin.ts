@@ -54,6 +54,9 @@ function checkConn(b: Partial<ConnectionInput>, requirePassword: boolean): Respo
   if (!(b.username ?? "").trim()) return err(400, "required, max 100 characters", "username");
   if (requirePassword && !b.password) return err(400, "required", "password");
   if (b.ssl_mode && !SSL.includes(b.ssl_mode)) return err(400, `must be one of ${SSL.join(", ")}`, "ssl_mode");
+  if (b.ssl_root_cert && b.ssl_mode !== "verify-ca" && b.ssl_mode !== "verify-full") {
+    return err(400, "only valid with ssl_mode verify-ca or verify-full", "ssl_root_cert");
+  }
   return null;
 }
 
@@ -160,7 +163,7 @@ export const adminHandlers = [
     if (s.connections.some((c) => c.name === body.name.trim())) return err(409, "database connection name already exists");
     const c: Connection = {
       id: uid(), name: body.name.trim(), host: body.host.trim(), port: body.port || 5432, db_name: body.db_name.trim(),
-      username: body.username.trim(), ssl_mode: body.ssl_mode || "prefer", created_by: currentUser()!.id,
+      username: body.username.trim(), ssl_mode: body.ssl_mode || "prefer", ssl_root_cert: body.ssl_root_cert || "", created_by: currentUser()!.id,
       created_at: now(), updated_at: now(),
     };
     s.connections.push(c);
@@ -174,7 +177,7 @@ export const adminHandlers = [
     if (s.connections.some((x) => x.id !== id && x.name === body.name.trim())) return err(409, "database connection name already exists");
     Object.assign(c, {
       name: body.name.trim(), host: body.host.trim(), port: body.port || 5432, db_name: body.db_name.trim(),
-      username: body.username.trim(), ssl_mode: body.ssl_mode || "prefer", updated_at: now(),
+      username: body.username.trim(), ssl_mode: body.ssl_mode || "prefer", ssl_root_cert: body.ssl_root_cert || "", updated_at: now(),
     });
     return HttpResponse.json(c);
   })),

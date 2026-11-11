@@ -9,7 +9,7 @@ import { useToast } from "../../components/toast";
 import { errorMessage } from "../../lib/errors";
 import type { Connection, ConnectionInput, SSLMode } from "../../lib/types";
 
-const FIELDS = ["name", "host", "port", "db_name", "username", "password", "ssl_mode"];
+const FIELDS = ["name", "host", "port", "db_name", "username", "password", "ssl_mode", "ssl_root_cert"];
 const SSL: SSLMode[] = ["disable", "allow", "prefer", "require", "verify-ca", "verify-full"];
 
 function ConnectionForm({ conn, onClose }: { conn?: Connection; onClose: () => void }) {
@@ -21,8 +21,14 @@ function ConnectionForm({ conn, onClose }: { conn?: Connection; onClose: () => v
   const [f, setF] = useState({
     name: conn?.name ?? "", host: conn?.host ?? "localhost", port: String(conn?.port ?? 5432),
     db_name: conn?.db_name ?? "", username: conn?.username ?? "", password: "", ssl_mode: (conn?.ssl_mode ?? "prefer") as SSLMode,
+    ssl_root_cert: conn?.ssl_root_cert ?? "",
   });
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
+  const setSSL = (e: { target: { value: string } }) => {
+    const ssl_mode = e.target.value as SSLMode;
+    const keepCert = ssl_mode === "verify-ca" || ssl_mode === "verify-full";
+    setF({ ...f, ssl_mode, ssl_root_cert: keepCert ? f.ssl_root_cert : "" });
+  };
   const input = (): ConnectionInput => ({ ...f, port: Number(f.port) || undefined, password: f.password || undefined });
 
   async function submit(e: FormEvent) {
@@ -55,8 +61,14 @@ function ConnectionForm({ conn, onClose }: { conn?: Connection; onClose: () => v
           </Field>
         </div>
         <Field label="SSL mode" error={err("ssl_mode")}>
-          <select className={inputCls} value={f.ssl_mode} onChange={set("ssl_mode")}>{SSL.map((s) => <option key={s}>{s}</option>)}</select>
+          <select className={inputCls} value={f.ssl_mode} onChange={setSSL}>{SSL.map((s) => <option key={s}>{s}</option>)}</select>
         </Field>
+        {(f.ssl_mode === "verify-ca" || f.ssl_mode === "verify-full") && (
+          <Field label="SSL root certificate (PEM)" error={err("ssl_root_cert")} hint="Kosongkan untuk memakai system trust store">
+            <textarea className={`${inputCls} h-32 font-mono text-xs`} value={f.ssl_root_cert} spellCheck={false}
+              placeholder="-----BEGIN CERTIFICATE-----" onChange={set("ssl_root_cert")} />
+          </Field>
+        )}
         <div aria-live="polite" className="text-sm">
           {test.data && <p className="rounded bg-green-50 px-3 py-2 text-green-700">Terhubung: {test.data.server_version}</p>}
           {test.error && <p className="rounded bg-red-50 px-3 py-2 text-red-700">Gagal: {(test.error as Error).message}</p>}

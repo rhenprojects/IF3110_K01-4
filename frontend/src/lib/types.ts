@@ -30,6 +30,7 @@ export type Connection = {
   db_name: string;
   username: string;
   ssl_mode: SSLMode;
+  ssl_root_cert?: string;
   created_by: string;
   created_at: string;
   updated_at: string;
@@ -43,6 +44,7 @@ export type ConnectionInput = {
   username: string;
   password?: string;
   ssl_mode?: SSLMode;
+  ssl_root_cert?: string;
 };
 export type TestResult = { status: "ok"; server_version: string };
 

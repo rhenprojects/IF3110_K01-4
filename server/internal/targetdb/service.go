@@ -2,6 +2,7 @@ package targetdb
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"strings"
 	"web_backend/internal/authz"
@@ -19,13 +20,14 @@ var validSSLModes = map[string]bool{
 }
 
 type ConnectionInput struct {
-	Name     string `json:"name"`
-	Host     string `json:"host"`
-	Port     int    `json:"port"`
-	DBName   string `json:"db_name"`
-	Username string `json:"username"`
-	Password string `json:"password"`
-	SSLMode  string `json:"ssl_mode"`
+	Name        string `json:"name"`
+	Host        string `json:"host"`
+	Port        int    `json:"port"`
+	DBName      string `json:"db_name"`
+	Username    string `json:"username"`
+	Password    string `json:"password"`
+	SSLMode     string `json:"ssl_mode"`
+	SSLRootCert string `json:"ssl_root_cert"`
 }
 
 func (in *ConnectionInput) normalize(requirePassword bool) error {
@@ -58,6 +60,12 @@ func (in *ConnectionInput) normalize(requirePassword bool) error {
 		return &ValidationError{"password", "required"}
 	case !validSSLModes[in.SSLMode]:
 		return &ValidationError{"ssl_mode", "must be one of disable, allow, prefer, require, verify-ca, verify-full"}
+	case in.SSLRootCert != "" && in.SSLMode != "verify-ca" && in.SSLMode != "verify-full":
+		return &ValidationError{"ssl_root_cert", "only valid with ssl_mode verify-ca or verify-full"}
+	case len(in.SSLRootCert) > 64*1024:
+		return &ValidationError{"ssl_root_cert", "max 64 KB"}
+	case in.SSLRootCert != "" && !x509.NewCertPool().AppendCertsFromPEM([]byte(in.SSLRootCert)):
+		return &ValidationError{"ssl_root_cert", "must contain a valid PEM certificate"}
 	}
 	return nil
 }
@@ -66,6 +74,7 @@ func (in *ConnectionInput) params() ConnParams {
 	return ConnParams{
 		Host: in.Host, Port: in.Port, DBName: in.DBName,
 		Username: in.Username, Password: in.Password, SSLMode: in.SSLMode,
+		SSLRootCert: in.SSLRootCert,
 	}
 }
 
@@ -116,6 +125,7 @@ func (s *Service) Create(ctx context.Context, in ConnectionInput, createdBy stri
 		Username:    in.Username,
 		PasswordEnc: enc,
 		SSLMode:     in.SSLMode,
+		SSLRootCert: in.SSLRootCert,
 		CreatedBy:   createdBy,
 	}
 	if err := s.db.WithContext(ctx).Create(&conn).Error; err != nil {
@@ -139,6 +149,7 @@ func (s *Service) Update(ctx context.Context, id string, in ConnectionInput) (*m
 	conn.DBName = in.DBName
 	conn.Username = in.Username
 	conn.SSLMode = in.SSLMode
+	conn.SSLRootCert = in.SSLRootCert
 	if in.Password != "" {
 		if conn.PasswordEnc, err = s.cipher.Encrypt(in.Password); err != nil {
 			return nil, err
@@ -206,6 +217,7 @@ func (s *Service) paramsFor(ctx context.Context, id string) (ConnParams, error) 
 	return ConnParams{
 		Host: conn.Host, Port: conn.Port, DBName: conn.DBName,
 		Username: conn.Username, Password: password, SSLMode: conn.SSLMode,
+		SSLRootCert: conn.SSLRootCert,
 	}, nil
 }
 

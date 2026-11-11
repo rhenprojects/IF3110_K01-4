@@ -267,7 +267,7 @@ Bentuk data `Connection` (**password tidak pernah dikembalikan**):
 ```json
 {
   "id": "…", "name": "toko", "host": "localhost", "port": 5432,
-  "db_name": "toko", "username": "postgres", "ssl_mode": "prefer",
+  "db_name": "toko", "username": "postgres", "ssl_mode": "prefer", "ssl_root_cert": "",
   "created_by": "<id user>", "created_at": "…", "updated_at": "…"
 }
 ```
@@ -283,6 +283,7 @@ Aturan input:
 | `username` | Wajib, maksimal 100 karakter |
 | `password` | Wajib saat membuat. Saat mengubah, **kosong berarti tidak diganti** |
 | `ssl_mode` | `disable`, `allow`, `prefer` (default), `require`, `verify-ca`, atau `verify-full` |
+| `ssl_root_cert` | Opsional. Isi PEM CA untuk `verify-ca`/`verify-full`; kosong berarti memakai system trust store. Ditolak untuk mode lain. Maksimal 64 KB |
 
 | Endpoint | Fungsi |
 |---|---|

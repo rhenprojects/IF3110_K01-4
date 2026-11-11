@@ -35,6 +35,9 @@ func (m *PoolManager) Get(ctx context.Context, id string, params ConnParams) (*p
 	if err != nil {
 		return nil, classifyConnError(err)
 	}
+	if err := applySSLRootCert(cfg.ConnConfig, params.SSLRootCert); err != nil {
+		return nil, classifyConnError(err)
+	}
 	cfg.MaxConns = poolMaxConns
 
 	ctx, cancel := context.WithTimeout(ctx, connectTimeout)
@@ -81,7 +84,14 @@ func TestConnection(ctx context.Context, params ConnParams) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, connectTimeout)
 	defer cancel()
 
-	conn, err := pgx.Connect(ctx, params.DSN())
+	cfg, err := pgx.ParseConfig(params.DSN())
+	if err != nil {
+		return "", classifyConnError(err)
+	}
+	if err := applySSLRootCert(cfg, params.SSLRootCert); err != nil {
+		return "", classifyConnError(err)
+	}
+	conn, err := pgx.ConnectConfig(ctx, cfg)
 	if err != nil {
 		return "", classifyConnError(err)
 	}

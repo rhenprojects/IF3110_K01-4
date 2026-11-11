@@ -15,12 +15,13 @@ func quoteDSNValue(v string) string {
 }
 
 type ConnParams struct {
-	Host     string
-	Port     int
-	DBName   string
-	Username string
-	Password string
-	SSLMode  string
+	Host        string
+	Port        int
+	DBName      string
+	Username    string
+	Password    string
+	SSLMode     string
+	SSLRootCert string
 }
 
 func (p ConnParams) DSN() string {
