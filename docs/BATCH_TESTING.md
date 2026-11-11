@@ -2,6 +2,8 @@
 
 Panduan ini menjelaskan cara menguji fitur batch migration (item 3): pembuatan batch dari beberapa draft, eksekusi berurutan dengan checkpoint, pembatalan di batas item, retry, audit trail, serta pengamatan metrik.
 
+Untuk skenario manual 10 migration, invoker 200 migration, dan checklist keamanan lengkap, lihat [`BATCH_MANUAL_TESTING.md`](BATCH_MANUAL_TESTING.md).
+
 Batasan yang diuji sengaja mencerminkan keputusan desain:
 
 - Satu transaction per migration, bukan satu transaction untuk seluruh batch.
