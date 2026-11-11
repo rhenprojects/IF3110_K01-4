@@ -36,7 +36,7 @@ Login → Access Control → Pilih Database → Lihat Schema/Data
 | `frontend/` | Frontend React + Vite + TypeScript + Tailwind |
 | `docs/` | Kontrak API, schema database, checklist pengujian |
 | `scripts/invoker.sh` | Build, menjalankan, dan menjalankan test |
-| `deploy/docker-compose.yml` | Menjalankan database, backend, frontend, Prometheus, dan Grafana sekaligus |
+| `deploy/` | Docker Compose, Dockerfile backend/frontend, dan konfigurasi Prometheus/Grafana |
 
 ## Menjalankan dengan Docker Compose (disarankan)
 
