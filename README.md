@@ -36,14 +36,16 @@ Login → Access Control → Pilih Database → Lihat Schema/Data
 | `frontend/` | Frontend React + Vite + TypeScript + Tailwind |
 | `docs/` | Kontrak API, schema database, checklist pengujian |
 | `scripts/invoker.sh` | Build, menjalankan, dan menjalankan test |
-| `docker-compose.yml` | Menjalankan database, backend, dan frontend sekaligus |
+| `deploy/docker-compose.yml` | Menjalankan database, backend, frontend, Prometheus, dan Grafana sekaligus |
 
 ## Menjalankan dengan Docker Compose (disarankan)
 
 Kebutuhan: Docker Desktop.
 
+Jalankan dari root repository:
+
 ```sh
-docker compose up --build
+docker compose -f deploy/docker-compose.yml up --build
 ```
 
 | Layanan | Alamat |
@@ -54,7 +56,7 @@ docker compose up --build
 
 Login awal: **`admin` / `admin-password`** (Platform Admin).
 
-Menghentikan: `docker compose down`. Menghapus juga seluruh data: `docker compose down -v`.
+Menghentikan: `docker compose -f deploy/docker-compose.yml down`. Menghapus juga seluruh data: `docker compose -f deploy/docker-compose.yml down -v`.
 
 ### Menyiapkan database contoh untuk dicoba
 
@@ -115,7 +117,7 @@ Buka http://localhost:5173. Permintaan `/api` diteruskan ke `localhost:9000` ole
 | `PORT` | tidak | Port backend, default `9000` |
 | `DEV_AUTH=true` | **jangan di production** | Hanya untuk development/test: identitas diambil dari header `X-Debug-User` |
 
-Nilai di `docker-compose.yml` dan `scripts/invoker.sh` hanya untuk development dan pengujian.
+Nilai di `deploy/docker-compose.yml` dan `scripts/invoker.sh` hanya untuk development dan pengujian.
 
 ## Pengujian
 

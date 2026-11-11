@@ -1,7 +1,9 @@
+name: if3110_k01-4
+
 services:
   backend:
     build:
-      context: ./server
+      context: ../server
       dockerfile: Dockerfile
     container_name: if3110-backend
     ports:
@@ -22,7 +24,7 @@ services:
 
   frontend:
     build:
-      context: ./frontend
+      context: ../frontend
       dockerfile: Dockerfile
     container_name: if3110-frontend
     ports:
@@ -36,7 +38,7 @@ services:
     container_name: if3110-prometheus
     command: ["--config.file=/etc/prometheus/prometheus.yml"]
     volumes:
-      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
     ports:
       - "9090:9090"
     depends_on:
@@ -50,8 +52,8 @@ services:
       GF_SECURITY_ADMIN_PASSWORD: admin
       GF_USERS_ALLOW_SIGN_UP: "false"
     volumes:
-      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
     ports:
       - "3000:3000"
     depends_on:

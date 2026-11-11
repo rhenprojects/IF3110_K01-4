@@ -11,9 +11,11 @@ Batasan yang diuji sengaja mencerminkan keputusan desain:
 
 ## 1. Prasyarat
 
+Jalankan dari root repository:
+
 ```bash
-docker compose up -d --build
-docker compose exec db createdb -U postgres target_db   # database target untuk koneksi uji
+docker compose -f deploy/docker-compose.yml up -d --build
+docker compose -f deploy/docker-compose.yml exec db createdb -U postgres target_db   # database target untuk koneksi uji
 ```
 
 Seed admin, koneksi, group, dan akses lewat UI atau API admin. Untuk script otomatis, minimal ada satu user admin dan satu database dengan level akses `edit`.
@@ -72,7 +74,7 @@ Untuk membandingkan dengan eksekusi manual, jalankan `scripts/benchmark.sh` dan 
 ```bash
 # mulai batch berisi banyak draft, lalu hentikan backend di tengah jalan
 docker kill if3110-backend
-docker compose up -d backend
+docker compose -f deploy/docker-compose.yml up -d backend
 ```
 
 Setelah start, log harus memuat `Memulihkan N batch migration yang terhenti`. Item yang sedang berjalan menjadi `failed` dengan error `interrupted`, batch menjadi `partial` (bila sudah ada item sukses) atau `failed`. Item `pending` tetap `pending` sehingga bisa di-retry.
