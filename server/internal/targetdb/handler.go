@@ -18,11 +18,9 @@ func NewHandler(svc *Service) *Handler {
 	return &Handler{svc: svc}
 }
 
-func (h *Handler) RegisterRoutes(router fiber.Router, middleware ...fiber.Handler) {
-	handlers := make([]fiber.Handler, 0, len(middleware)+2)
-	handlers = append(handlers, middleware...)
-	handlers = append(handlers, authctx.RequireAdmin, h.requireService)
-	g := router.Group("/admin/connections", handlers...)
+// RegisterRoutes mendaftarkan route admin; router protected sudah terautentikasi.
+func (h *Handler) RegisterRoutes(router fiber.Router) {
+	g := router.Group("/admin/connections", h.requireService, authctx.RequireAdmin)
 
 	g.Get("/", h.List)
 	g.Post("/", h.Create)
@@ -35,11 +33,8 @@ func (h *Handler) RegisterRoutes(router fiber.Router, middleware ...fiber.Handle
 
 // RegisterUserRoutes menyediakan akses koneksi berdasarkan keanggotaan group
 // dan level CanView/CanEdit, bukan hanya Platform Admin.
-func (h *Handler) RegisterUserRoutes(router fiber.Router, middleware ...fiber.Handler) {
-	handlers := make([]fiber.Handler, 0, len(middleware)+2)
-	handlers = append(handlers, middleware...)
-	handlers = append(handlers, authctx.RequireAuth, h.requireService)
-	g := router.Group("/connections", handlers...)
+func (h *Handler) RegisterUserRoutes(router fiber.Router) {
+	g := router.Group("/connections", h.requireService)
 
 	g.Get("/", h.ListAccessible)
 	g.Get("/:id", h.GetAccessible)

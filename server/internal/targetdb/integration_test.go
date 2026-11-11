@@ -68,7 +68,7 @@ func setup(t *testing.T) *testEnv {
 	svc := targetdb.NewService(db, cipher, pools)
 
 	app := fiber.New()
-	app.Use(authctx.DevAuth(true))
+	app.Use(authctx.DevAuth(true), authctx.RequireAuth)
 	handler := targetdb.NewHandler(svc)
 	handler.RegisterRoutes(app)
 	handler.RegisterUserRoutes(app)

@@ -48,11 +48,9 @@ func (h *Handler) requireDB(c *fiber.Ctx) error {
 	return c.Next()
 }
 
-func (h *Handler) RegisterRoutes(router fiber.Router, middleware ...fiber.Handler) {
-	handlers := make([]fiber.Handler, 0, len(middleware)+2)
-	handlers = append(handlers, middleware...)
-	handlers = append(handlers, authctx.RequireAuth, h.requireDB)
-	g := router.Group("/databases", handlers...)
+// RegisterRoutes mendaftarkan route database; router protected sudah terautentikasi.
+func (h *Handler) RegisterRoutes(router fiber.Router) {
+	g := router.Group("/databases", h.requireDB)
 
 	g.Get("/", h.List)
 	g.Get("/:id", h.Get)

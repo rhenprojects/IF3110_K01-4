@@ -90,7 +90,8 @@ func setup(t *testing.T) *env {
 	e.grant(e.viewer, e.connectionID, models.AccessView)
 
 	e.app = fiber.New()
-	databasehandler.NewHandler(db, e.conns).RegisterRoutes(e.app, authctx.DevAuth(true))
+	e.app.Use(authctx.DevAuth(true), authctx.RequireAuth)
+	databasehandler.NewHandler(db, e.conns).RegisterRoutes(e.app)
 	return e
 }
 
@@ -252,7 +253,6 @@ func (e *env) execute(userID, migrationID string) (int, models.Migration, string
 	status, raw := e.do(userID, "POST", e.dbPath("migrations", migrationID, "execute"), nil, &m)
 	return status, m, raw
 }
-
 
 func TestIntegrationDatabaseList(t *testing.T) {
 	e := setup(t)
@@ -429,7 +429,6 @@ func TestIntegrationUnreachableTarget(t *testing.T) {
 		t.Errorf("unreachable target: status %d body %s, want 502 without secrets", status, raw)
 	}
 }
-
 
 func TestIntegrationMigrationLifecycle(t *testing.T) {
 	e := setup(t)

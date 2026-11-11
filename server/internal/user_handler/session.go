@@ -49,8 +49,6 @@ type SessionService struct {
 	Now           func() time.Time
 }
 
-var Session *SessionService
-
 func NewSessionService(db *gorm.DB, hashKey, blockKey []byte) *SessionService {
 	return &SessionService{
 		DB:     db,
@@ -60,9 +58,12 @@ func NewSessionService(db *gorm.DB, hashKey, blockKey []byte) *SessionService {
 	}
 }
 
-func InitSession(db *gorm.DB, hashKey, blockKey []byte) *SessionService {
-	Session = NewSessionService(db, hashKey, blockKey)
-	return Session
+// IsUnauthorized melaporkan apakah err berarti kegagalan autentikasi dari sisi
+// klien (tidak ada session, tidak valid, atau sudah kedaluwarsa/dicabut).
+func (s *SessionService) IsUnauthorized(err error) bool {
+	return errors.Is(err, ErrNoSession) ||
+		errors.Is(err, ErrInvalidSession) ||
+		errors.Is(err, ErrExpiredSession)
 }
 
 func (s *SessionService) now() time.Time {

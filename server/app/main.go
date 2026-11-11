@@ -101,7 +101,7 @@ func main() {
 	if len(hashKey) == 0 || len(blockKey) == 0 {
 		log.Println("[WARN] SESSION_HASH_KEY atau SESSION_BLOCK_KEY belum diset. Cookie session memakai key acak dan tidak valid setelah server restart")
 	}
-	sessionService := userhandler.InitSession(db, hashKey, blockKey)
+	sessionService := userhandler.NewSessionService(db, hashKey, blockKey)
 	env := strings.ToLower(strings.TrimSpace(os.Getenv("APP_ENV")))
 	secureCookies := env == "production" || env == "prod"
 	if !secureCookies {
@@ -115,7 +115,7 @@ func main() {
 	app := fiber.New()
 	app.Use(fiberLogger.New())
 	app.Use(fiberRecover.New())
-	api.SetupRoutes(app, db, connService, devAuth)
+	api.SetupRoutes(app, db, connService, devAuth, sessionService)
 
 	port := os.Getenv("PORT")
 	if port == "" {

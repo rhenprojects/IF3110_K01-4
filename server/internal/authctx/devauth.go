@@ -10,8 +10,7 @@ func DevAuth(enabled bool) fiber.Handler {
 			return c.Next()
 		}
 		if userID := c.Get("X-Debug-User"); userID != "" {
-			c.Locals(UserIDKey, userID)
-			c.Locals(IsAdminKey, c.Get("X-Debug-Admin") == "true")
+			SetIdentity(c, userID, c.Get("X-Debug-Admin") == "true")
 		}
 		return c.Next()
 	}

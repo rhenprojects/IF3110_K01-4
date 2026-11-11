@@ -182,7 +182,8 @@ func TestParseMigrationInput(t *testing.T) {
 
 func TestRoutesRequireLoginAndDatabase(t *testing.T) {
 	app := fiber.New()
-	NewHandler(nil, nil).RegisterRoutes(app, authctx.DevAuth(true))
+	app.Use(authctx.DevAuth(true), authctx.RequireAuth)
+	NewHandler(nil, nil).RegisterRoutes(app)
 
 	req := httptest.NewRequest("GET", "/databases", nil)
 	if resp, _ := app.Test(req); resp.StatusCode != fiber.StatusUnauthorized {

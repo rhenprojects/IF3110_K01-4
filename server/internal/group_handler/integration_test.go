@@ -43,7 +43,8 @@ func setup(t *testing.T) (*fiber.App, *gorm.DB) {
 		t.Fatalf("migrate: %v", err)
 	}
 	app := fiber.New()
-	grouphandler.NewGroupHandler(db).RegisterRoutes(app, authctx.DevAuth(true))
+	app.Use(authctx.DevAuth(true), authctx.RequireAuth)
+	grouphandler.NewGroupHandler(db).RegisterRoutes(app)
 	return app, db
 }
 

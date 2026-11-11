@@ -27,8 +27,9 @@ Login → Access Control → Pilih Database → Lihat Schema/Data
 | `server/` | Backend Go (Fiber + GORM + pgx) |
 | `server/app/main.go` | Entry point: konfigurasi, AutoMigrate, seed admin |
 | `server/internal/authz/` | **Aturan hak akses** (`CanView`, `CanEdit`, akses efektif) |
-| `server/internal/authctx/` | Middleware `RequireAuth` / `RequireAdmin` dan identitas user per request |
-| `server/internal/user_handler/` | Login, session, CSRF, CRUD user |
+| `server/internal/authctx/` | Identitas user per request (`UserID`, `IsAdmin`, `Session`) dan guard `RequireAuth` / `RequireAdmin` |
+| `server/internal/middleware/` | Middleware autentikasi session (`RequireSession`), CSRF, dan perakitan dependency-nya |
+| `server/internal/user_handler/` | Login, session, CRUD user |
 | `server/internal/group_handler/` | CRUD group, keanggotaan, pemberian akses database |
 | `server/internal/targetdb/` | Koneksi database target: enkripsi kredensial, pool, test koneksi |
 | `server/internal/database_handler/` | Viewer schema/data dan migration |

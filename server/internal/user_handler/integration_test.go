@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 	"web_backend/internal/authctx"
+	"web_backend/internal/middleware"
 	"web_backend/internal/models"
 	userhandler "web_backend/internal/user_handler"
 
@@ -45,15 +46,19 @@ func setup(t *testing.T) (*fiber.App, *gorm.DB) {
 	); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	userhandler.InitSession(db, nil, nil)
+	sessions := userhandler.NewSessionService(db, nil, nil)
 
-	h := userhandler.NewUserHandler(db)
+	h := userhandler.NewUserHandler(db, sessions)
 	app := fiber.New()
-	h.RegisterRoutes(app, app,
+	h.RegisterPublicRoutes(app)
+
+	auth := middleware.NewAuth(db, sessions)
+	protected := app.Group("",
 		authctx.DevAuth(true),
-		h.SessionAuth,
-		h.RequireCSRF,
+		auth.RequireSession,
+		auth.RequireCSRF,
 	)
+	h.RegisterRoutes(protected)
 	return app, db
 }
 

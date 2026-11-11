@@ -28,11 +28,9 @@ func (h *GroupHandler) requireDB(c *fiber.Ctx) error {
 	return c.Next()
 }
 
-func (h *GroupHandler) RegisterRoutes(router fiber.Router, middleware ...fiber.Handler) {
-	handlers := make([]fiber.Handler, 0, len(middleware)+2)
-	handlers = append(handlers, middleware...)
-	handlers = append(handlers, h.requireDB, authctx.RequireAdmin)
-	g := router.Group("/admin/groups", handlers...)
+// RegisterRoutes mendaftarkan route admin; router protected sudah terautentikasi.
+func (h *GroupHandler) RegisterRoutes(router fiber.Router) {
+	g := router.Group("/admin/groups", h.requireDB, authctx.RequireAdmin)
 
 	g.Post("/", h.CreateGroup)
 	g.Get("/", h.ListGroups)

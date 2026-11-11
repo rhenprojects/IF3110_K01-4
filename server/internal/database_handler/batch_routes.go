@@ -13,11 +13,10 @@ import (
 	"github.com/google/uuid"
 )
 
-func (h *Handler) RegisterBatchRoutes(router fiber.Router, middleware ...fiber.Handler) {
-	handlers := make([]fiber.Handler, 0, len(middleware)+2)
-	handlers = append(handlers, middleware...)
-	handlers = append(handlers, authctx.RequireAuth, h.requireDB)
-	g := router.Group("/databases", handlers...)
+// RegisterBatchRoutes mendaftarkan route batch migration; router protected
+// sudah terautentikasi.
+func (h *Handler) RegisterBatchRoutes(router fiber.Router) {
+	g := router.Group("/databases", h.requireDB)
 
 	g.Post("/:id/batches", h.CreateBatch)
 	g.Get("/:id/batches", h.ListBatches)

@@ -12,11 +12,12 @@ import (
 )
 
 type UserHandler struct {
-	DB *gorm.DB
+	DB       *gorm.DB
+	Sessions *SessionService
 }
 
-func NewUserHandler(db *gorm.DB) *UserHandler {
-	return &UserHandler{DB: db}
+func NewUserHandler(db *gorm.DB, sessions *SessionService) *UserHandler {
+	return &UserHandler{DB: db, Sessions: sessions}
 }
 
 func (h *UserHandler) requireDB(c *fiber.Ctx) error {
@@ -56,7 +57,7 @@ func (h *UserHandler) Login(c *fiber.Ctx) error {
 		return httpx.Error(c, fiber.StatusUnauthorized, "Invalid username or password")
 	}
 
-	if _, _, err := Session.Create(c, user.ID); err != nil {
+	if _, _, err := h.Sessions.Create(c, user.ID); err != nil {
 		log.Printf("[user] create session failed: %v", err)
 		return httpx.Error(c, fiber.StatusInternalServerError, "Failed to create session")
 	}
@@ -68,7 +69,7 @@ func (h *UserHandler) Login(c *fiber.Ctx) error {
 }
 
 func (h *UserHandler) Logout(c *fiber.Ctx) error {
-	if err := Session.Revoke(c); err != nil {
+	if err := h.Sessions.Revoke(c); err != nil {
 		log.Printf("[user] logout failed: %v", err)
 		return httpx.Error(c, fiber.StatusInternalServerError, "Failed to logout")
 	}
@@ -140,24 +141,22 @@ func writeUserError(c *fiber.Ctx, err error) error {
 	return httpx.Error(c, fiber.StatusInternalServerError, "Internal server error")
 }
 
-// RegisterRoutes mendaftarkan route publik dan route yang sudah dilindungi.
-// Middleware diberikan sebagai argumen agar tidak berlaku ke route login.
-func (h *UserHandler) RegisterRoutes(public, protected fiber.Router, middleware ...fiber.Handler) {
-	usersPublic := public.Group("/users")
-	usersPublic.Post("/login", h.requireDB, h.Login)
+// RegisterPublicRoutes mendaftarkan route yang boleh diakses tanpa session.
+// Route publik harus didaftarkan sebelum grup protected dibuat, karena
+// middleware protected berlaku untuk seluruh prefix router-nya.
+func (h *UserHandler) RegisterPublicRoutes(public fiber.Router) {
+	public.Group("/users").Post("/login", h.requireDB, h.Login)
+}
 
-	protectedMiddleware := func(extra ...fiber.Handler) []fiber.Handler {
-		all := make([]fiber.Handler, 0, len(middleware)+len(extra))
-		all = append(all, middleware...)
-		all = append(all, extra...)
-		return all
-	}
-
-	users := protected.Group("/users", protectedMiddleware(h.requireDB)...)
+// RegisterRoutes mendaftarkan route terproteksi. Router protected sudah membawa
+// middleware autentikasi dan CSRF; paket ini hanya menambahkan pengecekan
+// ketersediaan database dan otorisasi admin.
+func (h *UserHandler) RegisterRoutes(protected fiber.Router) {
+	users := protected.Group("/users", h.requireDB)
 	users.Get("/profile", h.GetProfile)
 	users.Post("/logout", h.Logout)
 
-	admin := protected.Group("/admin/users", protectedMiddleware(h.requireDB, authctx.RequireAdmin)...)
+	admin := protected.Group("/admin/users", h.requireDB, authctx.RequireAdmin)
 	admin.Post("/", h.CreateUser)
 	admin.Get("/", h.ListUsers)
 	admin.Get("/:id", h.GetUserByID)

@@ -5,6 +5,7 @@ import (
 	databasehandler "web_backend/internal/database_handler"
 	grouphandler "web_backend/internal/group_handler"
 	"web_backend/internal/httpx"
+	"web_backend/internal/middleware"
 	"web_backend/internal/models"
 	"web_backend/internal/targetdb"
 	userhandler "web_backend/internal/user_handler"
@@ -15,9 +16,11 @@ import (
 
 var benchRawBody = []byte(`{"status":"ok"}`)
 
-func SetupRoutes(app *fiber.App, db *gorm.DB, connService *targetdb.Service, devAuth bool) {
+func SetupRoutes(app *fiber.App, db *gorm.DB, connService *targetdb.Service, devAuth bool, sessions *userhandler.SessionService) {
 	api := app.Group("/api/v1")
 
+	// Route publik (health, echo, login) harus didaftarkan sebelum grup
+	// protected, karena middleware protected berlaku untuk prefix /api/v1.
 	api.Get("/bench-raw", func(c *fiber.Ctx) error {
 		c.Set(fiber.HeaderContentType, fiber.MIMEApplicationJSON)
 		return c.Send(benchRawBody)
@@ -62,21 +65,24 @@ func SetupRoutes(app *fiber.App, db *gorm.DB, connService *targetdb.Service, dev
 		})
 	})
 
-	userHandler := userhandler.NewUserHandler(db)
-	middleware := []fiber.Handler{
-		authctx.DevAuth(devAuth),
-		userHandler.SessionAuth,
-		userHandler.RequireCSRF,
-	}
+	userHandler := userhandler.NewUserHandler(db, sessions)
+	userHandler.RegisterPublicRoutes(api)
 
-	userHandler.RegisterRoutes(api, api, middleware...)
+	auth := middleware.NewAuth(db, sessions)
+	protected := api.Group("",
+		authctx.DevAuth(devAuth),
+		auth.RequireSession,
+		auth.RequireCSRF,
+	)
+
+	userHandler.RegisterRoutes(protected)
 
 	connHandler := targetdb.NewHandler(connService)
-	connHandler.RegisterRoutes(api, middleware...)
-	connHandler.RegisterUserRoutes(api, middleware...)
+	connHandler.RegisterRoutes(protected)
+	connHandler.RegisterUserRoutes(protected)
 
-	grouphandler.NewGroupHandler(db).RegisterRoutes(api, middleware...)
+	grouphandler.NewGroupHandler(db).RegisterRoutes(protected)
 	dbHandler := databasehandler.NewHandler(db, connService)
-	dbHandler.RegisterRoutes(api, middleware...)
-	dbHandler.RegisterBatchRoutes(api, middleware...)
+	dbHandler.RegisterRoutes(protected)
+	dbHandler.RegisterBatchRoutes(protected)
 }
