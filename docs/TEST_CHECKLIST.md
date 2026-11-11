@@ -21,7 +21,7 @@ sh scripts/invoker.sh test-all    # unit + integration + API smoke
 | 5 | Absolute timeout 24 jam | `TestIntegrationSessionTimeout` | PASS |
 | 6 | Logout merevoke session, menghapus cookie, dan profile langsung 401 | `TestIntegrationLogout` | PASS |
 | 7 | CSRF: wajib pada POST/PUT/DELETE, aman untuk GET/HEAD/OPTIONS | `TestRequireCSRF`, `TestIntegrationCSRF` | PASS |
-| 8 | Middleware `RequireAuth`, `RequireAdmin`, `DevAuth`, dan `SessionAuth` | `TestRequireAdmin`, `TestRequireAuth`, `TestDevAuthDisabledIgnoresHeaders`, integration login/profile | PASS |
+| 8 | Middleware `RequireAuth`, `RequireAdmin`, `DevAuth`, dan `RequireSession` | `TestRequireAdmin`, `TestRequireAuth`, `TestDevAuthDisabledIgnoresHeaders`, integration login/profile | PASS |
 | 9 | Authorization `CanView`/`CanEdit`: none, view, edit, admin, gabungan group, membership dicabut | `TestIntegrationLevelMatrix`, `TestCanViewAndCanEditWithoutAccess` | PASS |
 | 10 | CRUD user: create, list, get, update, delete, duplicate, validasi, proteksi self/last admin | `TestIntegrationUserCRUD`, `TestIntegrationCreateUserByAdmin`, `TestIntegrationCreateUserDenied` | PASS |
 | 11 | CRUD group dan keanggotaan | `TestIntegrationGroupCRUD`, `TestIntegrationMembership` | PASS |
@@ -45,8 +45,9 @@ sh scripts/invoker.sh test-all    # unit + integration + API smoke
 | 24 | Migration versi linear per koneksi: 1, 2, ...; migration gagal tidak memakai versi; tidak bisa diubah/dijalankan ulang; satu migration berjalan per koneksi | `TestIntegrationMigrationLifecycle`, `TestIntegrationMigrationRollbackOnFailure`, `TestLockForIsPerConnection` | PASS |
 | 25 | Riwayat migration: versi, SQL, pelaksana, waktu, durasi, status; View Only hanya bisa melihat; View + Edit bisa membuat/mengubah/menjalankan | `TestIntegrationMigrationLifecycle`, `TestIntegrationMigrationAccessControl`, `TestIntegrationMigrationValidationAndNotFound`, API smoke test | PASS |
 | 26 | TLS target: `verify-full`/`verify-ca` dengan CA custom; CA ditolak untuk mode lain; `verify-full` tanpa CA gagal | `TestNormalizeSSLRootCert`, `TestApplySSLRootCert`, `scripts/invoker.sh test-ssl` | PASS |
+| 27 | SAST CodeQL Go + TypeScript; 0 open/closed alert pada commit `5b71acb` | GitHub Actions run `42983148889`, `docs/CODEQL_SAST.md` | PASS |
 
 ## Ringkasan
 
-- PASS: 26
+- PASS: 27
 - FAIL: 0
