@@ -1,5 +1,5 @@
 import { http, HttpResponse } from "msw";
-import type { AccessLevel, BatchItem, BatchStatus, Connection, Migration, MigrationBatch, MigrationInput } from "../lib/types";
+import type { AccessLevel, BatchItem, BatchStatus, Connection, Migration, MigrationBatch, MigrationInput, MigrationJob } from "../lib/types";
 import { currentUser, err } from "./auth";
 import { load, save, type Store, type StoredUser } from "./db";
 import { applySql, emptyTarget } from "./target";
@@ -52,6 +52,68 @@ function checkInput(b: Partial<MigrationInput>): Response | null {
   if (!(b.sql ?? "").trim()) return err(400, "required", "sql");
   return null;
 }
+
+const definition = (b: Partial<MigrationInput>) => ({
+  name: b.name!.trim(), sql: b.sql!, sql_down: b.sql_down ?? "",
+  irreversible: !!b.irreversible, irreversible_reason: (b.irreversible_reason ?? "").trim(),
+});
+
+//[queue] sama dengan engine.ValidateDefinition: up wajib, lalu down atau alasan irreversible
+function checkDefinition(m: Migration): Response | null {
+  if (!m.sql.trim()) return err(400, "required", "sql");
+  if (m.irreversible) return m.irreversible_reason.trim() ? null : err(400, "required when irreversible", "irreversible_reason");
+  return m.sql_down.trim() ? null : err(400, "required unless irreversible", "sql_down");
+}
+
+//[queue] job tiruan dimajukan satu langkah setiap polling: queued -> running -> success/failed
+const ACTIVE = ["queued", "running", "uncertain"];
+
+function advanceJob(s: Store, conn: Connection, j: MigrationJob) {
+  if (j.status === "queued") {
+    Object.assign(j, { status: "running", attempts: j.attempts + 1, worker_id: "mock-worker-1", started_at: now(), heartbeat_at: now(), updated_at: now() });
+    return;
+  }
+  if (j.status !== "running") return;
+  const list = s.migrations[conn.id] ?? [];
+  const m = list.find((x) => x.id === j.migration_id);
+  if (!m) return Object.assign(j, { status: "failed", error: "migration not found", finished_at: now(), updated_at: now() });
+  if (conn.host === "down" || conn.host === "slow") {
+    //[mock] database tidak terjangkau = error sementara: di-retry sampai max_attempts
+    const final = j.attempts >= j.max_attempts;
+    Object.assign(j, { status: final ? "failed" : "queued", error: "cannot connect to target database", updated_at: now(), finished_at: final ? now() : null });
+    recordExecution(s, j, m, "failed", 1, "cannot connect to target database", "08006");
+    if (final) Object.assign(m, { status: "failed", error: j.error, updated_at: now() });
+    return;
+  }
+  const t0 = performance.now();
+  let error = "";
+  try {
+    s.targets[conn.id] = applySql(s.targets[conn.id] ?? emptyTarget(), m.sql);
+    m.status = "success";
+    m.version = Math.max(0, ...list.map((x) => x.version ?? 0)) + 1;
+    m.error = "";
+  } catch (e) {
+    error = (e as Error).message;
+    Object.assign(m, { status: "failed", version: null, error });
+  }
+  const user = s.users.find((u) => u.id === j.requested_by);
+  const duration = Math.max(1, Math.round(performance.now() - t0));
+  Object.assign(m, { executed_by: j.requested_by, executed_by_name: user?.name ?? j.requested_by, executed_at: now(), updated_at: now(), duration_ms: duration });
+  Object.assign(j, { status: error ? "failed" : "success", error, finished_at: now(), updated_at: now() });
+  recordExecution(s, j, m, error ? "failed" : "success", duration, error, error ? "42601" : "");
+}
+
+function recordExecution(s: Store, j: MigrationJob, m: Migration, status: "success" | "failed", duration: number, error: string, sqlstate: string) {
+  s.executions.push({
+    id: s.executions.length + 1, execution_id: j.execution_id, attempt: j.attempts, job_id: j.id, connection_id: j.connection_id,
+    migration_id: m.id, kind: j.kind, status, revision: m.revision, migration_version: status === "success" ? m.version : null,
+    sql: m.sql, rollback_of: null, executed_by: j.requested_by, started_at: j.started_at ?? now(), finished_at: now(),
+    duration_ms: duration, error, sqlstate, recovered: false, created_at: now(),
+  });
+}
+
+const withName = (s: Store, conn: Connection, j: MigrationJob) =>
+  ({ ...j, migration_name: s.migrations[conn.id]?.find((m) => m.id === j.migration_id)?.name });
 
 //[batch] mesin status batch tiruan: satu item dimajukan tiap polling GET /batches/:bid
 const TERMINAL: BatchStatus[] = ["success", "partial", "failed", "cancelled"];
@@ -180,7 +242,7 @@ export const databaseHandlers = [
     const bad = checkInput(b);
     if (bad) return bad;
     const m: Migration = {
-      id: crypto.randomUUID(), connection_id: conn.id, version: null, name: b.name!.trim(), sql: b.sql!, status: "draft", error: "",
+      id: crypto.randomUUID(), connection_id: conn.id, version: null, ...definition(b), revision: 1, status: "draft", error: "",
       created_by: user.id, created_by_name: user.name, executed_by: null, executed_by_name: null,
       created_at: now(), updated_at: now(), executed_at: null, duration_ms: null,
     };
@@ -195,36 +257,44 @@ export const databaseHandlers = [
     const bad = checkInput(b);
     if (bad) return bad;
     if (m.status !== "draft") return err(409, "only draft migrations can be edited");
-    Object.assign(m, { name: b.name!.trim(), sql: b.sql!, updated_at: now() });
+    if (s.jobs.some((j) => j.migration_id === m.id)) return err(409, "migration is immutable once queued");
+    Object.assign(m, { ...definition(b), revision: m.revision + 1, updated_at: now() });
     return HttpResponse.json(m);
   })),
 
-  //[execute] SQL gagal = tetap 200 dengan status "failed" (contract 9); database tidak terjangkau = 502/504 dan tetap draft
+  //[execute] 202 + job; hasil (success/failed) dibaca lewat GET /jobs/:jid
   http.post(`${P}/:id/migrations/:mid/execute`, db("edit", ({ s, conn, user, params }) => {
-    const list = (s.migrations[conn.id] ??= []);
-    const m = list.find((x) => x.id === params.mid);
+    const m = s.migrations[conn.id]?.find((x) => x.id === params.mid);
     if (!m) return err(404, "migration not found");
-    if (m.status !== "draft") return err(409, "only draft migrations can be executed");
-    const down = unreachable(conn);
-    if (down) return down;
-    //[mock] SQL berisi pg_sleep mensimulasikan migration lain yang sedang berjalan di database yang sama
-    if (/pg_sleep/i.test(m.sql)) return err(409, "another migration is already running on this database");
-    const t0 = performance.now();
-    try {
-      s.targets[conn.id] = applySql(s.targets[conn.id] ?? emptyTarget(), m.sql);
-      m.status = "success";
-      m.version = Math.max(0, ...list.map((x) => x.version ?? 0)) + 1;
-      m.error = "";
-    } catch (e) {
-      m.status = "failed";
-      m.version = null;
-      m.error = (e as Error).message;
-    }
-    Object.assign(m, {
-      executed_by: user.id, executed_by_name: user.name, executed_at: now(), updated_at: now(),
-      duration_ms: Math.max(1, Math.round(performance.now() - t0)),
-    });
-    return HttpResponse.json(m);
+    if (m.status !== "draft") return err(409, "migration cannot be executed in its current status");
+    const bad = checkDefinition(m);
+    if (bad) return bad;
+    if (s.jobs.some((j) => j.migration_id === m.id && ACTIVE.includes(j.status))) return err(409, "migration already has an active job");
+    const j: MigrationJob = {
+      id: crypto.randomUUID(), connection_id: conn.id, migration_id: m.id, execution_id: crypto.randomUUID(), kind: "up",
+      status: "queued", rollback_of: null, attempts: 0, max_attempts: 3, run_after: now(), worker_id: "", heartbeat_at: null,
+      error: "", requested_by: user.id, created_at: now(), updated_at: now(), started_at: null, finished_at: null,
+    };
+    s.jobs.unshift(j);
+    return HttpResponse.json(withName(s, conn, j), { status: 202 });
+  })),
+
+  http.get(`${P}/:id/jobs`, db("view", ({ s, conn }) => {
+    const jobs = s.jobs.filter((j) => j.connection_id === conn.id);
+    jobs.filter((j) => ACTIVE.includes(j.status)).forEach((j) => advanceJob(s, conn, j));
+    return HttpResponse.json({ jobs: jobs.slice(0, 50).map((j) => withName(s, conn, j)) });
+  })),
+
+  http.get(`${P}/:id/jobs/:jid`, db("view", ({ s, conn, params }) => {
+    const j = s.jobs.find((x) => x.id === params.jid && x.connection_id === conn.id);
+    if (!j) return err(404, "job not found");
+    advanceJob(s, conn, j);
+    return HttpResponse.json(withName(s, conn, j));
+  })),
+
+  http.get(`${P}/:id/migrations/:mid/executions`, db("view", ({ s, conn, params }) => {
+    if (!s.migrations[conn.id]?.some((m) => m.id === params.mid)) return err(404, "migration not found");
+    return HttpResponse.json({ executions: s.executions.filter((x) => x.migration_id === params.mid) });
   })),
   //[batch] daftar batch + detail; progres dimajukan satu item setiap GET detail (cukup untuk demo)
   http.get(`${P}/:id/batches`, db("view", ({ s, conn, url }) => {

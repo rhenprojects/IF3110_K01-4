@@ -83,6 +83,10 @@ export type Migration = {
   version: number | null; //[migration] hanya terisi untuk status success
   name: string;
   sql: string;
+  sql_down: string; //[migration] SQL pembatal; wajib kecuali irreversible
+  irreversible: boolean;
+  irreversible_reason: string;
+  revision: number; //[migration] naik setiap draft diubah
   status: MigrationStatus;
   error: string;
   created_by: string;
@@ -94,7 +98,55 @@ export type Migration = {
   executed_at: string | null;
   duration_ms: number | null;
 };
-export type MigrationInput = { name: string; sql: string };
+export type MigrationInput = { name: string; sql: string; sql_down?: string; irreversible?: boolean; irreversible_reason?: string };
+
+//[queue] satu permintaan eksekusi di queue; execute menjawab 202 dengan objek ini
+export type JobKind = "up" | "rollback" | "forward";
+export type JobStatus = "queued" | "running" | "success" | "failed" | "uncertain";
+export type MigrationJob = {
+  id: string;
+  connection_id: string;
+  migration_id: string;
+  migration_name?: string;
+  execution_id: string;
+  kind: JobKind;
+  status: JobStatus;
+  rollback_of: string | null;
+  attempts: number;
+  max_attempts: number;
+  run_after: string;
+  worker_id: string;
+  heartbeat_at: string | null;
+  error: string;
+  requested_by: string;
+  created_at: string;
+  updated_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+};
+//[history] satu attempt eksekusi (append-only), berisi salinan SQL yang benar-benar dijalankan
+export type MigrationExecution = {
+  id: number;
+  execution_id: string;
+  attempt: number;
+  job_id: string | null;
+  connection_id: string;
+  migration_id: string;
+  kind: JobKind;
+  status: "success" | "failed";
+  revision: number;
+  migration_version: number | null;
+  sql: string;
+  rollback_of: string | null;
+  executed_by: string;
+  started_at: string;
+  finished_at: string;
+  duration_ms: number;
+  error: string;
+  sqlstate: string;
+  recovered: boolean;
+  created_at: string;
+};
 
 //[batch] eksekusi sekumpulan draft migration secara berurutan (docs/api-contract.md bagian 9)
 export type BatchStatus = "queued" | "running" | "success" | "partial" | "failed" | "cancelled";
