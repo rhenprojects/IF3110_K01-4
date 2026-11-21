@@ -3,6 +3,7 @@ package api
 import (
 	"web_backend/internal/authctx"
 	databasehandler "web_backend/internal/database_handler"
+	"web_backend/internal/engine"
 	grouphandler "web_backend/internal/group_handler"
 	"web_backend/internal/httpx"
 	"web_backend/internal/middleware"
@@ -16,7 +17,7 @@ import (
 
 var benchRawBody = []byte(`{"status":"ok"}`)
 
-func SetupRoutes(app *fiber.App, db *gorm.DB, connService *targetdb.Service, devAuth bool, sessions *userhandler.SessionService) {
+func SetupRoutes(app *fiber.App, db *gorm.DB, connService *targetdb.Service, devAuth bool, sessions *userhandler.SessionService, eng *engine.Engine) {
 	api := app.Group("/api/v1")
 
 	// Route publik (health, echo, login) harus didaftarkan sebelum grup
@@ -82,7 +83,7 @@ func SetupRoutes(app *fiber.App, db *gorm.DB, connService *targetdb.Service, dev
 	connHandler.RegisterUserRoutes(protected)
 
 	grouphandler.NewGroupHandler(db).RegisterRoutes(protected)
-	dbHandler := databasehandler.NewHandler(db, connService)
+	dbHandler := databasehandler.NewHandlerWithEngine(db, connService, eng)
 	dbHandler.RegisterRoutes(protected)
 	dbHandler.RegisterBatchRoutes(protected)
 }

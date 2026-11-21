@@ -3,24 +3,33 @@ package main
 import (
 	"context"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"web_backend/internal/api"
 	"web_backend/internal/database_handler"
+	"web_backend/internal/engine"
 	"web_backend/internal/models"
 	"web_backend/internal/observability"
 	"web_backend/internal/targetdb"
+	"web_backend/internal/telemetry"
 	userhandler "web_backend/internal/user_handler"
 
 	fiber "github.com/gofiber/fiber/v2"
-	fiberLogger "github.com/gofiber/fiber/v2/middleware/logger"
 	fiberRecover "github.com/gofiber/fiber/v2/middleware/recover"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
 func main() {
+	logger := telemetry.NewLogger(os.Stdout)
+	slog.SetDefault(logger)
+	if _, err := telemetry.Setup("dbmp-backend", os.Stdout); err != nil {
+		log.Fatalf("Gagal menyiapkan OpenTelemetry: %v", err)
+	}
+
 	var db *gorm.DB
 	var err error
 
@@ -34,17 +43,7 @@ func main() {
 		log.Printf("[WARN] Gagal terhubung ke database: %v (Menjalankan server tanpa database)", err)
 		db = nil
 	} else {
-		if err := db.AutoMigrate(
-			&models.User{},
-			&models.Group{},
-			&models.GroupMember{},
-			&models.Session{},
-			&models.DBConnection{},
-			&models.GroupDatabaseAccess{},
-			&models.Migration{},
-			&models.MigrationBatch{},
-			&models.MigrationBatchItem{},
-		); err != nil {
+		if err := models.Migrate(db); err != nil {
 			log.Printf("[WARN] Gagal melakukan migrasi database: %v", err)
 		}
 		created, err := userhandler.EnsureAdmin(db, os.Getenv("ADMIN_USERNAME"), os.Getenv("ADMIN_PASSWORD"))
@@ -70,9 +69,17 @@ func main() {
 		log.Fatalf("Gagal membuat cipher: %v", err)
 	}
 	var connService *targetdb.Service
+	var eng *engine.Engine
 	if db != nil {
 		connService = targetdb.NewService(db, connCipher, targetdb.NewPoolManager())
-		coordinator := databasehandler.NewHandler(db, connService).NewBatchCoordinator()
+		eng, err = engine.New(db, connService, engine.Options{})
+		if err != nil {
+			log.Fatalf("Gagal membuat migration engine: %v", err)
+		}
+		if workers := envInt("WORKER_COUNT", 2); workers > 0 {
+			eng.Start(workers)
+		}
+		coordinator := databasehandler.NewHandlerWithEngine(db, connService, eng).NewBatchCoordinator()
 		if recovered, err := coordinator.Recover(context.Background()); err != nil {
 			log.Printf("[WARN] Gagal memulihkan batch migration: %v", err)
 		} else if recovered > 0 {
@@ -113,9 +120,9 @@ func main() {
 	sessionService.SecureCookies = secureCookies
 
 	app := fiber.New()
-	app.Use(fiberLogger.New())
+	app.Use(telemetry.Middleware(logger))
 	app.Use(fiberRecover.New())
-	api.SetupRoutes(app, db, connService, devAuth, sessionService)
+	api.SetupRoutes(app, db, connService, devAuth, sessionService, eng)
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -124,4 +131,12 @@ func main() {
 
 	log.Printf("Server berhasil dijalankan pada http://localhost:%s", port)
 	log.Fatal(app.Listen(":" + port))
+}
+
+func envInt(name string, fallback int) int {
+	value, err := strconv.Atoi(strings.TrimSpace(os.Getenv(name)))
+	if err != nil || value < 0 {
+		return fallback
+	}
+	return value
 }
