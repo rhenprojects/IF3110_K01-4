@@ -99,17 +99,14 @@ func (e *Engine) resolve(ctx context.Context, jobID string, cutoff time.Time) (b
 
 	var m models.Migration
 	if err := e.db.WithContext(ctx).First(&m, "id = ?", job.MigrationID).Error; err != nil {
-		return false,err
+		return false, err
 	}
 	started := e.now()
-	if job.StartedAt != nil 
-	{
+	if job.StartedAt != nil {
 		started = *job.StartedAt
 	}
 	res := attemptResult{sql: sqlFor(&m, job.Kind), started: started, finished: e.now(), recovered: true}
-	if committed 
-	{
-		
+	if committed {
 		res.status = models.ExecutionSuccess
 	} else {
 		res.status = models.ExecutionFailed
