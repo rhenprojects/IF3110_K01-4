@@ -2,7 +2,7 @@ import { Link, useOutletContext } from "react-router-dom";
 import { Badge, Button } from "../../components/ui";
 import { ApiError } from "../../lib/api";
 import { errorMessage, isConnectionError } from "../../lib/errors";
-import type { AccessLevel, BatchStatus, DatabaseItem, MigrationStatus } from "../../lib/types";
+import type { AccessLevel, BatchStatus, DatabaseItem, JobKind, JobStatus, MigrationStatus } from "../../lib/types";
 
 //[context] database yang sedang dibuka, disediakan DatabaseLayout lewat <Outlet context>
 export const useDb = () => useOutletContext<DatabaseItem>();
@@ -33,6 +33,19 @@ const BATCH: Record<BatchStatus, { tone: "neutral" | "dark" | "green" | "red" | 
 export function BatchStatusBadge({ status }: { status: BatchStatus }) {
   return <Badge tone={BATCH[status].tone}>{BATCH[status].label}</Badge>;
 }
+
+const JOB: Record<JobStatus, { tone: "neutral" | "dark" | "green" | "red" | "amber"; label: string }> = {
+  queued: { tone: "neutral", label: "Di queue" },
+  running: { tone: "dark", label: "Berjalan" },
+  success: { tone: "green", label: "Berhasil" },
+  failed: { tone: "red", label: "Gagal" },
+  uncertain: { tone: "amber", label: "Belum pasti" },
+};
+export function JobStatusBadge({ status }: { status: JobStatus }) {
+  return <Badge tone={JOB[status].tone}>{JOB[status].label}</Badge>;
+}
+
+export const KIND_LABEL: Record<JobKind, string> = { up: "Up", rollback: "Rollback", forward: "Forward" };
 
 //[error] satu tampilan untuk 403 / 404 / 502 / 504 agar semua halaman database konsisten
 export function StateError({ error, onRetry, backLink }: { error: unknown; onRetry?: () => void; backLink?: boolean }) {
