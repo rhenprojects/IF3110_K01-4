@@ -11,6 +11,7 @@ import MigrationDetail from "../pages/databases/MigrationDetail";
 import MigrationEditor from "../pages/databases/MigrationEditor";
 import BatchList from "../pages/databases/BatchList";
 import BatchDetail from "../pages/databases/BatchDetail";
+import JobQueue from "../pages/databases/JobQueue";
 import AdminLayout from "../pages/admin/AdminLayout";
 import Users from "../pages/admin/Users";
 import Groups from "../pages/admin/Groups";
@@ -37,6 +38,7 @@ export const router = createBrowserRouter([
               { path: "migrations/batches/:bid", element: <BatchDetail /> },
               { path: "migrations/:mid", element: <MigrationDetail /> },
               { path: "migrations/:mid/edit", element: <MigrationEditor /> },
+              { path: "queue", element: <JobQueue /> },
             ],
           },
           { path: "forbidden", element: <Forbidden /> },

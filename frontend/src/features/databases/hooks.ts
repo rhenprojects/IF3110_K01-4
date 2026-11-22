@@ -1,6 +1,8 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../lib/api";
-import type { BatchItem, DatabaseItem, Execution, Migration, MigrationBatch, MigrationInput, RowsResponse, SchemaResponse } from "../../lib/types";
+import type {
+  BatchItem, DatabaseItem, Execution, Migration, MigrationBatch, MigrationExecution, MigrationInput, MigrationJob, RowsResponse, SchemaResponse,
+} from "../../lib/types";
 
 //[query] semua key diawali "db" supaya ikut dibuang saat logout / 401 (lihat dropCache di auth.tsx).
 //[query] retry dimatikan: 403/404/502 bukan error sementara, user cukup menekan "Coba lagi".
@@ -51,15 +53,46 @@ export const useSaveMigration = (id: string) => {
   });
 };
 
-//[execute] berhasil atau gagal (rollback) sama-sama 200; yang membedakan field status.
-//[execute] seluruh cache database ini di-invalidate karena schema dan isi tabel bisa berubah.
+//[execute] 202 = job masuk queue; hasilnya dipantau lewat useJob sampai success/failed.
 export const useExecuteMigration = (id: string) => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (mid: string) => api<Migration>(`${base(id)}/migrations/${enc(mid)}/execute`, { method: "POST" }),
-    onSettled: () => qc.invalidateQueries({ queryKey: ["db", id] }),
+    mutationFn: (mid: string) => api<MigrationJob>(`${base(id)}/migrations/${enc(mid)}/execute`, { method: "POST" }),
+    onSettled: () => qc.invalidateQueries({ queryKey: ["db", id, "jobs"] }),
   });
 };
+
+//[queue] polling hanya selama masih ada job yang belum selesai
+const pending = (status?: string) => status === "queued" || status === "running" || status === "uncertain";
+
+export const useJobs = (id: string) =>
+  useQuery({
+    queryKey: ["db", id, "jobs"], retry: false,
+    queryFn: () => api<{ jobs: MigrationJob[] }>(`${base(id)}/jobs`).then((r) => r.jobs),
+    refetchInterval: (q) => (q.state.data?.some((j) => pending(j.status)) ? 1500 : false),
+  });
+
+//[queue] saat job selesai, cache migration/schema/rows di-invalidate karena isinya bisa berubah
+export const useJob = (id: string, jid?: string) => {
+  const qc = useQueryClient();
+  return useQuery({
+    queryKey: ["db", id, "jobs", jid], retry: false, enabled: !!jid,
+    queryFn: async () => {
+      const j = await api<MigrationJob>(`${base(id)}/jobs/${enc(jid!)}`);
+      if (!pending(j.status)) {
+        qc.invalidateQueries({ queryKey: ["db", id], predicate: (q) => q.queryKey[2] !== "jobs" });
+      }
+      return j;
+    },
+    refetchInterval: (q) => (pending(q.state.data?.status) ? 1000 : false),
+  });
+};
+
+export const useMigrationExecutions = (id: string, mid?: string) =>
+  useQuery({
+    queryKey: ["db", id, "migrations", mid, "executions"], retry: false, enabled: !!mid,
+    queryFn: () => api<{ executions: MigrationExecution[] }>(`${base(id)}/migrations/${enc(mid!)}/executions`).then((r) => r.executions),
+  });
 
 //[batch] progress hidup: polling hanya selama batch masih queued/running
 const live = (status?: string) => status === "queued" || status === "running";

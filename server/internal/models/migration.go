@@ -28,6 +28,11 @@ type Migration struct {
 	UpdatedAt    time.Time       `json:"updated_at" gorm:"column:updated_at;type:timestamptz;not null;default:CURRENT_TIMESTAMP"`
 	ExecutedAt   *time.Time      `json:"executed_at" gorm:"column:executed_at;type:timestamptz"`
 	DurationMs   *int64          `json:"duration_ms" gorm:"column:duration_ms;type:bigint"`
+	
+	SQLDown            string `json:"sql_down" gorm:"column:sql_down;type:text;not null;default:''"`
+	Irreversible       bool   `json:"irreversible" gorm:"column:irreversible;not null;default:false"`
+	IrreversibleReason string `json:"irreversible_reason" gorm:"column:irreversible_reason;type:text;not null;default:''"`
+	Revision           int    `json:"revision" gorm:"column:revision;not null;default:1"`
 
 	CreatedByName  string  `json:"created_by_name" gorm:"-"`
 	ExecutedByName *string `json:"executed_by_name" gorm:"-"`

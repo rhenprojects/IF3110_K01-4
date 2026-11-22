@@ -2,16 +2,14 @@ package databasehandler
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"log"
 	"net/url"
 	"strconv"
 	"strings"
-	"sync"
-	"time"
 	"web_backend/internal/authctx"
 	"web_backend/internal/authz"
+	"web_backend/internal/engine"
 	"web_backend/internal/httpx"
 	"web_backend/internal/models"
 	"web_backend/internal/targetdb"
@@ -29,20 +27,34 @@ var (
 	ErrMigrationRunning   = errors.New("another migration is already running on this database")
 	ErrNoDatabaseAccess   = errors.New("no access to this database")
 	ErrEditAccessRequired = errors.New("edit access required")
+	ErrMigrationImmutable = errors.New("migration has been executed; its SQL up/down is immutable, create a new migration instead")
 )
 
 type Handler struct {
-	db    *gorm.DB
-	svc   *targetdb.Service
-	locks sync.Map
+	db     *gorm.DB
+	svc    *targetdb.Service
+	engine *engine.Engine
 }
 
 func NewHandler(db *gorm.DB, svc *targetdb.Service) *Handler {
-	return &Handler{db: db, svc: svc}
+	return NewHandlerWithEngine(db, svc, nil)
 }
 
+// NewHandlerWithEngine memakai engine bersama yang worker-nya sudah berjalan
+func NewHandlerWithEngine(db *gorm.DB, svc *targetdb.Service, eng *engine.Engine) *Handler {
+	if eng == nil && db != nil && svc != nil {
+		if created, err := engine.New(db, svc, engine.Options{}); err == nil {
+			eng = created
+		}
+	}
+	return &Handler{db: db, svc: svc, engine: eng}
+}
+
+// Engine mengembalikan execution engine yang dipakai handler ini.
+func (h *Handler) Engine() *engine.Engine { return h.engine }
+
 func (h *Handler) requireDB(c *fiber.Ctx) error {
-	if h.db == nil || h.svc == nil {
+	if h.db == nil || h.svc == nil || h.engine == nil {
 		return httpx.Error(c, fiber.StatusServiceUnavailable, "Database is not connected")
 	}
 	return c.Next()
@@ -61,6 +73,9 @@ func (h *Handler) RegisterRoutes(router fiber.Router) {
 	g.Post("/:id/migrations", h.CreateMigration)
 	g.Put("/:id/migrations/:mid", h.UpdateMigration)
 	g.Post("/:id/migrations/:mid/execute", h.ExecuteMigration)
+	g.Get("/:id/migrations/:mid/executions", h.ListMigrationExecutions)
+	g.Get("/:id/jobs", h.ListJobs)
+	g.Get("/:id/jobs/:jid", h.GetJob)
 }
 
 func (h *Handler) List(c *fiber.Ctx) error {
@@ -201,17 +216,21 @@ func (h *Handler) CreateMigration(c *fiber.Ctx) error {
 	if err != nil {
 		return h.writeError(c, err)
 	}
-	name, script, err := parseMigrationInput(c)
+	input, err := parseMigrationInput(c)
 	if err != nil {
 		return h.writeError(c, err)
 	}
 	migration := models.Migration{
-		ConnectionID: conn.ID,
-		Name:         name,
-		SQL:          script,
-		Status:       models.MigrationDraft,
-		Error:        "",
-		CreatedBy:    authctx.UserID(c),
+		ConnectionID:       conn.ID,
+		Name:               input.Name,
+		SQL:                input.SQL,
+		SQLDown:            input.SQLDown,
+		Irreversible:       input.Irreversible,
+		IrreversibleReason: input.IrreversibleReason,
+		Revision:           1,
+		Status:             models.MigrationDraft,
+		Error:              "",
+		CreatedBy:          authctx.UserID(c),
 	}
 	if err := h.db.WithContext(c.UserContext()).Create(&migration).Error; err != nil {
 		return h.writeError(c, err)
@@ -234,12 +253,25 @@ func (h *Handler) UpdateMigration(c *fiber.Ctx) error {
 	if migration.Status != models.MigrationDraft {
 		return h.writeError(c, ErrMigrationNotDraft)
 	}
-	name, script, err := parseMigrationInput(c)
+	// SQL up/down yang pernah masuk queue (berhasil, gagal, atau masih menunggu) tidak boleh diubah; perbaikan dilakukan lewat migration baru.
+	var jobs int64
+	if err := h.db.WithContext(c.UserContext()).Model(&models.MigrationJob{}).
+		Where("migration_id = ?", migration.ID).Count(&jobs).Error; err != nil {
+		return h.writeError(c, err)
+	}
+	if jobs > 0 {
+		return h.writeError(c, ErrMigrationImmutable)
+	}
+	input, err := parseMigrationInput(c)
 	if err != nil {
 		return h.writeError(c, err)
 	}
-	migration.Name = name
-	migration.SQL = script
+	migration.Name = input.Name
+	migration.SQL = input.SQL
+	migration.SQLDown = input.SQLDown
+	migration.Irreversible = input.Irreversible
+	migration.IrreversibleReason = input.IrreversibleReason
+	migration.Revision++
 	if err := h.db.WithContext(c.UserContext()).Save(migration).Error; err != nil {
 		return h.writeError(c, err)
 	}
@@ -249,119 +281,92 @@ func (h *Handler) UpdateMigration(c *fiber.Ctx) error {
 	return c.JSON(migration)
 }
 
+// ExecuteMigration memasukkan eksekusi ke queue dan langsung mengembalikan job; SQL dijalankan worker secara asynchronous
+// Status dipantau lewat GET /databases/:id/jobs/:jid.
 func (h *Handler) ExecuteMigration(c *fiber.Ctx) error {
 	conn, _, err := h.accessible(c, true)
 	if err != nil {
 		return h.writeError(c, err)
 	}
-
-	lock := h.lockFor(conn.ID)
-	if !lock.TryLock() {
-		return h.writeError(c, ErrMigrationRunning)
+	job, err := h.engine.Enqueue(c.UserContext(), engine.EnqueueRequest{
+		ConnectionID: conn.ID,
+		MigrationID:  c.Params("mid"),
+		Kind:         models.JobKindUp,
+		RequestedBy:  authctx.UserID(c),
+	})
+	if err != nil {
+		return h.writeError(c, err)
 	}
-	defer lock.Unlock()
+	return c.Status(fiber.StatusAccepted).JSON(job)
+}
 
+func (h *Handler) ListJobs(c *fiber.Ctx) error {
+	conn, _, err := h.accessible(c, false)
+	if err != nil {
+		return h.writeError(c, err)
+	}
+	jobs, err := h.engine.ListJobs(c.UserContext(), conn.ID, queryInt(c.Query("limit"), 50, 1, 200))
+	if err != nil {
+		return h.writeError(c, err)
+	}
+	return c.JSON(models.JobListResponse{Jobs: jobs})
+}
+
+func (h *Handler) GetJob(c *fiber.Ctx) error {
+	conn, _, err := h.accessible(c, false)
+	if err != nil {
+		return h.writeError(c, err)
+	}
+	job, err := h.engine.GetJob(c.UserContext(), conn.ID, c.Params("jid"))
+	if err != nil {
+		return h.writeError(c, err)
+	}
+	return c.JSON(job)
+}
+
+// ListMigrationExecutions mengembalikan seluruh attempt migration beserta salinan SQL yang dijalankan
+func (h *Handler) ListMigrationExecutions(c *fiber.Ctx) error {
+	conn, _, err := h.accessible(c, false)
+	if err != nil {
+		return h.writeError(c, err)
+	}
 	migration, err := h.findMigration(c, conn.ID, c.Params("mid"))
 	if err != nil {
 		return h.writeError(c, err)
 	}
-	if migration.Status != models.MigrationDraft {
-		return h.writeError(c, ErrMigrationNotDraft)
-	}
-
-	pool, err := h.pool(c, conn.ID)
+	executions, err := h.engine.Executions(c.UserContext(), migration.ID)
 	if err != nil {
 		return h.writeError(c, err)
 	}
-
-	started := time.Now()
-	tx, err := pool.Begin(c.UserContext())
-	if err != nil {
-		return h.writeError(c, err)
-	}
-	_, execErr := tx.Exec(c.UserContext(), migration.SQL)
-	duration := time.Since(started).Milliseconds()
-	if duration < 1 {
-		duration = 1
-	}
-
-	now := time.Now().UTC()
-	userID := authctx.UserID(c)
-	migration.ExecutedBy = &userID
-	migration.ExecutedAt = &now
-	migration.DurationMs = &duration
-
-	if execErr != nil {
-		_ = tx.Rollback(c.UserContext())
-		migration.Status = models.MigrationFailed
-		migration.Error = execErr.Error()
-		migration.Version = nil
-		if err := h.db.WithContext(c.UserContext()).Save(migration).Error; err != nil {
-			return h.writeError(c, err)
-		}
-		if err := h.attachUserNames(c.UserContext(), []*models.Migration{migration}); err != nil {
-			return h.writeError(c, err)
-		}
-		return c.JSON(migration)
-	}
-
-	version, err := h.nextVersion(c.UserContext(), conn.ID)
-	if err != nil {
-		_ = tx.Rollback(context.Background())
-		return h.writeError(c, err)
-	}
-	migration.Status = models.MigrationSuccess
-	migration.Error = ""
-	migration.Version = &version
-	if err := h.db.WithContext(c.UserContext()).Save(migration).Error; err != nil {
-		_ = tx.Rollback(context.Background())
-		return h.writeError(c, err)
-	}
-
-	if err := tx.Commit(c.UserContext()); err != nil {
-		migration.Status = models.MigrationFailed
-		migration.Error = "commit failed: " + err.Error()
-		migration.Version = nil
-		if saveErr := h.db.WithContext(context.Background()).Save(migration).Error; saveErr != nil {
-			log.Printf("[database] migration %s: commit failed and status could not be saved: %v", migration.ID, saveErr)
-		}
-		return h.writeError(c, err)
-	}
-	if err := h.attachUserNames(c.UserContext(), []*models.Migration{migration}); err != nil {
-		return h.writeError(c, err)
-	}
-	return c.JSON(migration)
+	return c.JSON(models.ExecutionListResponse{Executions: executions})
 }
 
-func (h *Handler) nextVersion(ctx context.Context, connectionID string) (int, error) {
-	var max sql.NullInt64
-	if err := h.db.WithContext(ctx).
-		Raw("SELECT MAX(version) FROM migrations WHERE connection_id = ? AND status = ?", connectionID, models.MigrationSuccess).
-		Scan(&max).Error; err != nil {
-		return 0, err
-	}
-	if !max.Valid {
-		return 1, nil
-	}
-	return int(max.Int64) + 1, nil
+type migrationInput struct {
+	Name               string `json:"name"`
+	SQL                string `json:"sql"`
+	SQLDown            string `json:"sql_down"`
+	Irreversible       bool   `json:"irreversible"`
+	IrreversibleReason string `json:"irreversible_reason"`
 }
 
-func parseMigrationInput(c *fiber.Ctx) (string, string, error) {
-	var req struct {
-		Name string `json:"name"`
-		SQL  string `json:"sql"`
-	}
+// parseMigrationInput hanya mewajibkan nama dan SQL up; draft boleh belum punya SQL down
+func parseMigrationInput(c *fiber.Ctx) (migrationInput, error) {
+	var req migrationInput
 	if err := c.BodyParser(&req); err != nil {
-		return "", "", &validationError{"name", "invalid request body"}
+		return req, &validationError{"name", "invalid request body"}
 	}
-	name := strings.TrimSpace(req.Name)
+	req.Name = strings.TrimSpace(req.Name)
+	req.IrreversibleReason = strings.TrimSpace(req.IrreversibleReason)
 	switch {
-	case name == "" || len(name) > 200:
-		return "", "", &validationError{"name", "required, max 200 characters"}
+	case req.Name == "" || len(req.Name) > 200:
+		return req, &validationError{"name", "required, max 200 characters"}
 	case strings.TrimSpace(req.SQL) == "":
-		return "", "", &validationError{"sql", "required"}
+		return req, &validationError{"sql", "required"}
 	}
-	return name, req.SQL, nil
+	if !req.Irreversible {
+		req.IrreversibleReason = ""
+	}
+	return req, nil
 }
 
 type validationError struct {
@@ -456,16 +461,23 @@ func (h *Handler) attachUserNames(ctx context.Context, migrations []*models.Migr
 	return nil
 }
 
-func (h *Handler) lockFor(connectionID string) *sync.Mutex {
-	value, _ := h.locks.LoadOrStore(connectionID, &sync.Mutex{})
-	return value.(*sync.Mutex)
-}
-
 func (h *Handler) writeError(c *fiber.Ctx, err error) error {
 	var verr *validationError
+	var engineVerr *engine.ValidationError
 	switch {
 	case errors.As(err, &verr):
 		return httpx.ValidationError(c, verr.Field, verr.Message)
+	case errors.As(err, &engineVerr):
+		return httpx.ValidationError(c, engineVerr.Field, engineVerr.Message)
+	case errors.Is(err, engine.ErrMigrationNotFound):
+		return httpx.Error(c, fiber.StatusNotFound, ErrMigrationNotFound.Error())
+	case errors.Is(err, engine.ErrJobNotFound):
+		return httpx.Error(c, fiber.StatusNotFound, engine.ErrJobNotFound.Error())
+	case errors.Is(err, engine.ErrJobActive), errors.Is(err, engine.ErrNotExecutable),
+		errors.Is(err, engine.ErrIrreversible), errors.Is(err, ErrMigrationImmutable):
+		return httpx.Error(c, fiber.StatusConflict, err.Error())
+	case errors.Is(err, engine.ErrRollbackTarget), errors.Is(err, engine.ErrInvalidKind):
+		return httpx.Error(c, fiber.StatusBadRequest, err.Error())
 	case errors.Is(err, ErrDatabaseNotFound):
 		return httpx.Error(c, fiber.StatusNotFound, ErrDatabaseNotFound.Error())
 	case errors.Is(err, ErrNoDatabaseAccess), errors.Is(err, ErrEditAccessRequired):

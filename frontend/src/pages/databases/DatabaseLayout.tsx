@@ -24,6 +24,7 @@ export default function DatabaseLayout() {
       <nav className="mb-6 flex border-b">
         <NavLink to="." end className={tab}>Schema & Data</NavLink>
         <NavLink to="migrations" end className={tab}>Migrations</NavLink>
+        <NavLink to="queue" className={tab}>Queue</NavLink>
         <NavLink to="migrations/batches" className={tab}>Batch</NavLink>
       </nav>
       <Outlet context={db} />
