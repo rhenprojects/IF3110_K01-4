@@ -14,5 +14,7 @@ func All() []any {
 		&MigrationBatchItem{},
 		&MigrationJob{},
 		&MigrationExecution{},
+		&ChangeRequest{},
+		&Approval{},
 	}
 }

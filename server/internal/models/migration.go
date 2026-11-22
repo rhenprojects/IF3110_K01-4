@@ -6,10 +6,13 @@ import (
 
 type MigrationStatus string
 
+// Alur review: draft → pending_review → approved, lalu engine mengeksekusi (success/failed).
 const (
-	MigrationDraft   MigrationStatus = "draft"
-	MigrationSuccess MigrationStatus = "success"
-	MigrationFailed  MigrationStatus = "failed"
+	MigrationDraft         MigrationStatus = "draft"
+	MigrationPendingReview MigrationStatus = "pending_review"
+	MigrationApproved      MigrationStatus = "approved"
+	MigrationSuccess       MigrationStatus = "success"
+	MigrationFailed        MigrationStatus = "failed"
 )
 
 // Migration adalah satu perubahan SQL pada database target. Version diisi saat
@@ -20,7 +23,7 @@ type Migration struct {
 	Version      *int            `json:"version" gorm:"column:version;type:bigint;index:idx_migrations_connection_version,unique,where:version IS NOT NULL"`
 	Name         string          `json:"name" gorm:"column:name;type:varchar(200);not null"`
 	SQL          string          `json:"sql" gorm:"column:sql;type:text;not null"`
-	Status       MigrationStatus `json:"status" gorm:"column:status;type:varchar(10);not null;default:'draft';check:chk_migrations_status,status IN ('draft','success','failed')"`
+	Status       MigrationStatus `json:"status" gorm:"column:status;type:varchar(20);not null;default:'draft';check:chk_migrations_status,status IN ('draft','pending_review','approved','success','failed')"`
 	Error        string          `json:"error" gorm:"column:error;type:text;not null;default:''"`
 	CreatedBy    string          `json:"created_by" gorm:"column:created_by;type:varchar(64);not null"`
 	ExecutedBy   *string         `json:"executed_by" gorm:"column:executed_by;type:varchar(64)"`
@@ -28,7 +31,7 @@ type Migration struct {
 	UpdatedAt    time.Time       `json:"updated_at" gorm:"column:updated_at;type:timestamptz;not null;default:CURRENT_TIMESTAMP"`
 	ExecutedAt   *time.Time      `json:"executed_at" gorm:"column:executed_at;type:timestamptz"`
 	DurationMs   *int64          `json:"duration_ms" gorm:"column:duration_ms;type:bigint"`
-	
+
 	SQLDown            string `json:"sql_down" gorm:"column:sql_down;type:text;not null;default:''"`
 	Irreversible       bool   `json:"irreversible" gorm:"column:irreversible;not null;default:false"`
 	IrreversibleReason string `json:"irreversible_reason" gorm:"column:irreversible_reason;type:text;not null;default:''"`
