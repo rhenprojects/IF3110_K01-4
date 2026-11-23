@@ -68,6 +68,9 @@ func (h *Handler) requireDB(c *fiber.Ctx) error {
 
 // RegisterRoutes mendaftarkan route database; router protected sudah terautentikasi.
 func (h *Handler) RegisterRoutes(router fiber.Router) {
+	// Inbox leader lintas database; didaftarkan di luar grup /databases karena tidak terikat satu database.
+	router.Get("/change-requests/pending", h.requireDB, h.ListPendingChangeRequests)
+
 	g := router.Group("/databases", h.requireDB)
 
 	g.Get("/", h.List)
@@ -83,6 +86,7 @@ func (h *Handler) RegisterRoutes(router fiber.Router) {
 	g.Get("/:id/change-requests", h.ListChangeRequests)
 	g.Post("/:id/change-requests/:rid/approve", h.ApproveChangeRequest)
 	g.Post("/:id/change-requests/:rid/reject", h.RejectChangeRequest)
+	g.Post("/:id/change-requests/:rid/dispatch", h.DispatchChangeRequest)
 	g.Get("/:id/history", h.ListHistory)
 	g.Get("/:id/jobs", h.ListJobs)
 	g.Get("/:id/jobs/:jid", h.GetJob)

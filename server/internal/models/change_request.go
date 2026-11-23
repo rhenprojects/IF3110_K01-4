@@ -24,11 +24,32 @@ type ChangeRequest struct {
 	UpdatedAt    time.Time           `json:"updated_at" gorm:"column:updated_at;type:timestamptz;not null;default:CURRENT_TIMESTAMP"`
 	DecidedAt    *time.Time          `json:"decided_at" gorm:"column:decided_at;type:timestamptz"`
 
+	// Field turunan, diisi review.Service.Enrich; tidak disimpan di database.
+	MigrationName   string     `json:"migration_name,omitempty" gorm:"-"`
+	ConnectionName  string     `json:"connection_name,omitempty" gorm:"-"`
+	RequestedByName string     `json:"requested_by_name,omitempty" gorm:"-"`
+	Reviewers       []Reviewer `json:"reviewers" gorm:"-"`
+	CanDecide       bool       `json:"can_decide" gorm:"-"`
+
 	Connection DBConnection `json:"-" gorm:"foreignKey:ConnectionID;constraint:OnDelete:RESTRICT"`
 	Migration  Migration    `json:"-" gorm:"foreignKey:MigrationID;constraint:OnDelete:RESTRICT"`
 }
 
 func (ChangeRequest) TableName() string { return "change_requests" }
+
+// ReviewerPending adalah Reviewer.Decision untuk leader yang belum memutuskan.
+const ReviewerPending = "pending"
+
+// Reviewer menunjukkan keputusan satu leader atas sebuah ChangeRequest.
+type Reviewer struct {
+	GroupID    string     `json:"group_id"`
+	GroupName  string     `json:"group_name"`
+	LeaderID   *string    `json:"leader_id"`
+	LeaderName *string    `json:"leader_name"`
+	Decision   string     `json:"decision"` // approve | reject | pending
+	Comment    string     `json:"comment"`
+	DecidedAt  *time.Time `json:"decided_at"`
+}
 
 type ChangeRequestListResponse struct {
 	ChangeRequests []ChangeRequest `json:"change_requests"`

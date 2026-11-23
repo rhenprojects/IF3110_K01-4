@@ -444,24 +444,36 @@ Aturan input `POST` dan `PUT`: `name` wajib, maksimal 200 karakter. `sql` wajib,
 
 ### Review dan approval (change request)
 
-Setiap perubahan (`up`, `rollback`, `forward`) diajukan sebagai change request dan harus disetujui leader dari **setiap group yang punya akses** ke database (`view` maupun `edit`). Setelah leader terakhir menyetujui, permintaan otomatis masuk queue dan `job_id` terisi. Satu leader yang memimpin beberapa group cukup menyetujui sekali. Satu migration hanya boleh punya satu change request yang menunggu review.
+Setiap perubahan (`up`, `rollback`, `forward`) diajukan sebagai change request dan harus disetujui leader dari **setiap group yang punya akses** ke database (`view` maupun `edit`). Setelah leader terakhir menyetujui, permintaan otomatis masuk queue dan `job_id` terisi. Satu leader yang memimpin beberapa group cukup menyetujui sekali. Satu migration hanya boleh punya satu change request yang sedang berjalan: menunggu review, sudah disetujui tetapi belum masuk queue, atau sudah masuk queue dengan job yang belum selesai.
 
 | Endpoint | Fungsi |
 |---|---|
 | `POST /databases/:id/migrations/:mid/change-requests` | Ajukan perubahan. Body `{ "kind": "up" \| "rollback" \| "forward" }`. Harus `edit`. Response `201` + `ChangeRequest` berstatus `pending_review` |
-| `GET /databases/:id/change-requests?limit=50` | Daftar change request, terbaru dulu. Response `{ "change_requests": [...] }`. Minimal `view` |
+| `GET /databases/:id/change-requests?status=&limit=50` | Daftar change request, terbaru dulu. `status` opsional (`pending_review` \| `approved` \| `rejected`), nilai lain `400`. Response `{ "change_requests": [...] }`. Minimal `view` |
+| `GET /change-requests/pending?limit=50` | Inbox leader: permintaan di database mana pun yang menunggu keputusan user ini (user memimpin group yang punya akses ke database itu dan belum memutuskan), paling lama menunggu dulu. Kosong kalau user bukan leader. Response sama dengan daftar di atas |
 | `POST /databases/:id/change-requests/:rid/approve` | Setujui. Body opsional `{ "comment": "…" }`. Hanya leader group yang punya akses ke database ini |
 | `POST /databases/:id/change-requests/:rid/reject` | Tolak. Body opsional `{ "comment": "…" }`. Sama dengan approve; migration `up` kembali menjadi `draft` |
+| `POST /databases/:id/change-requests/:rid/dispatch` | Coba lagi memasukkan permintaan yang sudah `approved` tetapi `job_id`-nya masih `null` (respons `502` saat persetujuan terakhir). Harus `edit`. Idempoten dan aman dipanggil bersamaan: permintaan tidak pernah mendapat job kedua, dan job yang sempat dibuat tanpa tertaut ke permintaan hanya ditautkan. `409` kalau belum `approved` atau sudah basi. Server juga mengirim ulang permintaan seperti ini saat start |
 | `GET /databases/:id/history?hide_rollback=true` | Seluruh attempt eksekusi database ini secara kronologis (termasuk yang gagal). Dengan `hide_rollback=true`, eksekusi yang dibatalkan dan rollback sukses yang membatalkannya (dipasangkan lewat execution ID) disembunyikan. Minimal `view` |
 
 Bentuk `ChangeRequest`: `id`, `connection_id`, `migration_id`, `kind`, `rollback_of` (execution ID yang dibatalkan, khusus `rollback`), `status` (`pending_review` \| `approved` \| `rejected`), `requested_by`, `job_id` (terisi setelah masuk queue), `created_at`, `updated_at`, `decided_at`.
+
+Field turunan untuk SPA (tidak disimpan):
+
+| Field | Isi |
+|---|---|
+| `migration_name`, `connection_name`, `requested_by_name` | Nama untuk tampilan |
+| `reviewers` | Progres approval. Saat `pending_review`: satu baris per group yang punya akses (susunan group saat ini) berisi `group_id`, `group_name`, `leader_id`, `leader_name` (`null` kalau belum ada leader atau akunnya sudah dihapus), `decision` (`approve` \| `reject` \| `pending`), `comment`, `decided_at`. Setelah diputuskan: keputusan yang tercatat saja (tanpa `group_id`/`group_name`) |
+| `can_decide` | `true` kalau user yang meminta adalah leader yang belum memutuskan permintaan yang masih `pending_review` |
+
+Group yang leader-nya sudah dihapus dihitung belum punya leader: pengajuan baru ditolak `409` sampai admin menetapkan leader baru. Leader yang sudah pernah menyetujui lalu menjadi leader group lain bisa menekan approve sekali lagi untuk memicu evaluasi ulang; kalau belum memenuhi syarat, hasilnya tetap `409`.
 
 | Status | Penyebab |
 |---|---|
 | `400` | `kind` tidak dikenal, atau definisi migration tidak valid |
 | `403` | Bukan `edit` (saat mengajukan), atau bukan leader group database ini (saat approve/reject) |
 | `404` | Migration atau change request tidak ada di database ini |
-| `409` | Migration bukan `draft` (untuk `up`), sudah ada permintaan yang menunggu, ada group tanpa leader, leader sudah memutuskan, permintaan sudah tidak menunggu review, rollback/forward tidak sesuai urutan linear (bukan migration aktif terakhir, sudah aktif, belum pernah dieksekusi, irreversible), atau permintaan sudah basi saat akan masuk queue |
+| `409` | Migration bukan `draft` (untuk `up`), sudah ada permintaan yang sedang berjalan untuk migration itu, ada group tanpa leader, leader sudah memutuskan, permintaan sudah tidak menunggu review, rollback/forward tidak sesuai urutan linear (bukan migration aktif terakhir, sudah aktif, belum pernah dieksekusi, irreversible), atau permintaan sudah basi saat akan masuk queue |
 | `502` | Disetujui tetapi gagal dimasukkan ke queue |
 
 ---

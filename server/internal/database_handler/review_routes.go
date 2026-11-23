@@ -17,7 +17,7 @@ import (
 // reviewConflicts adalah penolakan karena keadaan permintaan atau riwayat migration saat ini (HTTP 409).
 var reviewConflicts = []error{
 	review.ErrNotDraft, review.ErrAlreadyPending, review.ErrGroupsWithoutLeader, review.ErrNotPending,
-	review.ErrAlreadyDecided, review.ErrStale,
+	review.ErrAlreadyDecided, review.ErrStale, review.ErrNotApproved,
 	workflow.ErrAlreadyActive, workflow.ErrNeverExecuted, workflow.ErrOutOfOrder, workflow.ErrNotInSequence,
 	workflow.ErrNotActive, workflow.ErrIrreversible, workflow.ErrNotLastActive,
 }
@@ -60,21 +60,54 @@ func (h *Handler) SubmitChangeRequest(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return h.writeError(c, &validationError{"kind", "invalid request body"})
 	}
-	cr, err := h.review.Submit(c.UserContext(), authctx.UserID(c), conn.ID, c.Params("mid"), req.Kind)
+	userID := authctx.UserID(c)
+	cr, err := h.review.Submit(c.UserContext(), userID, conn.ID, c.Params("mid"), req.Kind)
 	if err != nil {
+		return h.writeError(c, err)
+	}
+	if err := h.review.Enrich(c.UserContext(), userID, cr); err != nil {
 		return h.writeError(c, err)
 	}
 	return c.Status(fiber.StatusCreated).JSON(cr)
 }
 
+// ListChangeRequests mengembalikan change request database ini, terbaru dulu; ?status= menyaring berdasarkan status.
 func (h *Handler) ListChangeRequests(c *fiber.Ctx) error {
 	conn, _, err := h.accessible(c, false)
 	if err != nil {
 		return h.writeError(c, err)
 	}
+	query := h.db.WithContext(c.UserContext()).Where("connection_id = ?", conn.ID)
+	if raw := c.Query("status"); raw != "" {
+		switch status := models.ChangeRequestStatus(raw); status {
+		case models.ChangeRequestPendingReview, models.ChangeRequestApproved, models.ChangeRequestRejected:
+			query = query.Where("status = ?", status)
+		default:
+			return h.writeError(c, &validationError{"status", "must be pending_review, approved or rejected"})
+		}
+	}
 	requests := make([]models.ChangeRequest, 0)
-	if err := h.db.WithContext(c.UserContext()).Where("connection_id = ?", conn.ID).
-		Order("created_at DESC").Limit(queryInt(c.Query("limit"), 50, 1, 200)).Find(&requests).Error; err != nil {
+	if err := query.Order("created_at DESC").Limit(queryInt(c.Query("limit"), 50, 1, 200)).Find(&requests).Error; err != nil {
+		return h.writeError(c, err)
+	}
+	return h.respondRequests(c, requests)
+}
+
+// ListPendingChangeRequests adalah inbox leader: permintaan di database mana pun yang menunggu keputusan user ini.
+func (h *Handler) ListPendingChangeRequests(c *fiber.Ctx) error {
+	requests, err := h.review.PendingFor(c.UserContext(), authctx.UserID(c), queryInt(c.Query("limit"), 50, 1, 200))
+	if err != nil {
+		return h.writeError(c, err)
+	}
+	return h.respondRequests(c, requests)
+}
+
+func (h *Handler) respondRequests(c *fiber.Ctx, requests []models.ChangeRequest) error {
+	ptrs := make([]*models.ChangeRequest, len(requests))
+	for i := range requests {
+		ptrs[i] = &requests[i]
+	}
+	if err := h.review.Enrich(c.UserContext(), authctx.UserID(c), ptrs...); err != nil {
 		return h.writeError(c, err)
 	}
 	return c.JSON(models.ChangeRequestListResponse{ChangeRequests: requests})
@@ -88,22 +121,31 @@ func (h *Handler) RejectChangeRequest(c *fiber.Ctx) error {
 	return h.decideChangeRequest(c, h.review.Reject)
 }
 
-// decideChangeRequest tidak memeriksa level akses: hak memutuskan ada pada leader group (diperiksa review.Service),
-// dan leader tidak harus anggota group-nya.
-func (h *Handler) decideChangeRequest(c *fiber.Ctx, decide func(ctx context.Context, userID, requestID, comment string) (*models.ChangeRequest, error)) error {
+// ownedRequest memuat change request dari path dan memastikannya milik database di path yang sama.
+func (h *Handler) ownedRequest(c *fiber.Ctx) (*models.ChangeRequest, error) {
 	requestID, connectionID := c.Params("rid"), c.Params("id")
 	if _, err := uuid.Parse(requestID); err != nil {
-		return h.writeError(c, review.ErrRequestNotFound)
+		return nil, review.ErrRequestNotFound
 	}
 	if _, err := uuid.Parse(connectionID); err != nil {
-		return h.writeError(c, review.ErrRequestNotFound)
+		return nil, review.ErrRequestNotFound
 	}
-	// Permintaan hanya boleh diputuskan lewat database miliknya.
 	var cr models.ChangeRequest
 	if err := h.db.WithContext(c.UserContext()).First(&cr, "id = ? AND connection_id = ?", requestID, connectionID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return h.writeError(c, review.ErrRequestNotFound)
+			return nil, review.ErrRequestNotFound
 		}
+		return nil, err
+	}
+	return &cr, nil
+}
+
+// decideChangeRequest tidak memeriksa level akses: hak memutuskan ada pada leader group (diperiksa review.Service),
+// dan leader tidak harus anggota group-nya.
+func (h *Handler) decideChangeRequest(c *fiber.Ctx, decide func(ctx context.Context, userID, requestID, comment string) (*models.ChangeRequest, error)) error {
+	// Permintaan hanya boleh diputuskan lewat database miliknya.
+	cr, err := h.ownedRequest(c)
+	if err != nil {
 		return h.writeError(c, err)
 	}
 	var req struct {
@@ -114,11 +156,43 @@ func (h *Handler) decideChangeRequest(c *fiber.Ctx, decide func(ctx context.Cont
 			return h.writeError(c, &validationError{"comment", "invalid request body"})
 		}
 	}
-	updated, err := decide(c.UserContext(), authctx.UserID(c), cr.ID, req.Comment)
+	userID := authctx.UserID(c)
+	updated, err := decide(c.UserContext(), userID, cr.ID, req.Comment)
 	if err != nil {
 		return h.writeError(c, err)
 	}
+	if err := h.review.Enrich(c.UserContext(), userID, updated); err != nil {
+		return h.writeError(c, err)
+	}
 	return c.JSON(updated)
+}
+
+// DispatchChangeRequest mencoba lagi memasukkan permintaan yang sudah disetujui tetapi belum masuk queue (502 saat
+// persetujuan terakhir). Aman dipanggil berulang: permintaan yang sudah punya job dikembalikan apa adanya.
+func (h *Handler) DispatchChangeRequest(c *fiber.Ctx) error {
+	if _, _, err := h.accessible(c, true); err != nil {
+		return h.writeError(c, err)
+	}
+	cr, err := h.ownedRequest(c)
+	if err != nil {
+		return h.writeError(c, err)
+	}
+	updated, err := h.review.Dispatch(c.UserContext(), cr.ID)
+	if err != nil {
+		return h.writeError(c, err)
+	}
+	if err := h.review.Enrich(c.UserContext(), authctx.UserID(c), updated); err != nil {
+		return h.writeError(c, err)
+	}
+	return c.JSON(updated)
+}
+
+// RecoverApprovals mengirim ulang permintaan yang sudah disetujui tetapi belum sempat masuk queue (mis. setelah restart).
+func (h *Handler) RecoverApprovals(ctx context.Context) (int, error) {
+	if h.review == nil {
+		return 0, nil
+	}
+	return h.review.RedispatchApproved(ctx)
 }
 
 // ListHistory mengembalikan seluruh attempt eksekusi di database ini; ?hide_rollback=true menyembunyikan

@@ -24,7 +24,7 @@ var (
 	ErrRequestNotFound     = errors.New("change request not found")
 	ErrInvalidKind         = errors.New("unsupported change request kind")
 	ErrNotDraft            = errors.New("only draft migrations can be submitted for review")
-	ErrAlreadyPending      = errors.New("migration already has a change request pending review")
+	ErrAlreadyPending      = errors.New("migration already has a change request in progress")
 	ErrGroupsWithoutLeader = errors.New("every group with access must have a leader before review")
 	ErrNotPending          = errors.New("change request is not pending review")
 	ErrNotApproved         = errors.New("change request is not approved")
@@ -113,13 +113,11 @@ func (s *Service) Submit(ctx context.Context, userID, connectionID, migrationID 
 			cr.RollbackOf = &target.ID
 		}
 
-		var pending int64
-		if err := tx.Model(&models.ChangeRequest{}).
-			Where("migration_id = ? AND status = ?", m.ID, models.ChangeRequestPendingReview).
-			Count(&pending).Error; err != nil {
+		inFlight, err := hasInFlight(tx, m.ID)
+		if err != nil {
 			return err
 		}
-		if pending > 0 {
+		if inFlight {
 			return ErrAlreadyPending
 		}
 		if err := tx.Create(&cr).Error; err != nil {
@@ -181,15 +179,16 @@ func (s *Service) decide(ctx context.Context, userID, requestID string, decision
 			return ErrNotLeader
 		}
 
-		var decided int64
-		if err := tx.Model(&models.Approval{}).
-			Where("change_request_id = ? AND approver_id = ?", cr.ID, userID).Count(&decided).Error; err != nil {
+		var prior models.Approval
+		if err := tx.Where("change_request_id = ? AND approver_id = ?", cr.ID, userID).Limit(1).Find(&prior).Error; err != nil {
 			return err
 		}
-		if decided > 0 {
-			return ErrAlreadyDecided
-		}
-		if err := tx.Create(&models.Approval{
+		alreadyDecided := prior.ID != ""
+		if alreadyDecided {
+			if decision != models.DecisionApprove || prior.Decision != models.DecisionApprove {
+				return ErrAlreadyDecided
+			}
+		} else if err := tx.Create(&models.Approval{
 			ChangeRequestID: cr.ID, ApproverID: userID, Decision: decision, Comment: comment,
 		}).Error; err != nil {
 			if isUniqueViolation(err) {
@@ -212,6 +211,9 @@ func (s *Service) decide(ctx context.Context, userID, requestID string, decision
 			approved = true
 			return settle(tx, &cr, models.ChangeRequestApproved, models.MigrationApproved)
 		}
+		if alreadyDecided {
+			return ErrAlreadyDecided
+		}
 		return nil
 	})
 	if err != nil {
@@ -220,53 +222,108 @@ func (s *Service) decide(ctx context.Context, userID, requestID string, decision
 	return &cr, approved, nil
 }
 
-// Dispatch mengirim permintaan yang sudah disetujui ke queue; aman dipanggil ulang jika sebelumnya gagal.
+// Dispatch mengirim permintaan yang sudah disetujui ke queue.
 func (s *Service) Dispatch(ctx context.Context, requestID string) (*models.ChangeRequest, error) {
-	var cr models.ChangeRequest
-	err := s.db.WithContext(ctx).First(&cr, "id = ?", requestID).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
+	if _, err := uuid.Parse(requestID); err != nil {
 		return nil, ErrRequestNotFound
 	}
+
+	var cr models.ChangeRequest
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&cr, "id = ?", requestID).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrRequestNotFound
+		}
+		if err != nil {
+			return err
+		}
+		if cr.Status != models.ChangeRequestApproved {
+			return ErrNotApproved
+		}
+		if cr.JobID != nil {
+			return nil
+		}
+
+		// Cari job yang sudah ada lebih dulu: job itu bisa sudah selesai sehingga pemeriksaan basi di bawah
+		// salah menilainya.
+		jobID, err := findJob(tx, &cr)
+		if err != nil {
+			return err
+		}
+		if jobID == "" {
+			if err := checkStillValid(tx, &cr); err != nil {
+				return err
+			}
+			if jobID, err = s.deps.Enqueue(ctx, cr); err != nil {
+				return fmt.Errorf("%w: %w", ErrDispatchFailed, err)
+			}
+		}
+		if err := tx.Model(&cr).Update("job_id", jobID).Error; err != nil {
+			return err
+		}
+		cr.JobID = &jobID
+		return nil
+	})
 	if err != nil {
+		if errors.Is(err, ErrDispatchFailed) || errors.Is(err, ErrStale) {
+			return &cr, err
+		}
 		return nil, err
 	}
-	if cr.Status != models.ChangeRequestApproved {
-		return nil, ErrNotApproved
-	}
-	if cr.JobID != nil {
-		return &cr, nil
-	}
+	return &cr, nil
+}
 
-	if cr.Kind == models.JobKindRollback {
-		var m models.Migration
-		if err := s.db.WithContext(ctx).First(&m, "id = ?", cr.MigrationID).Error; err != nil {
-			return nil, err
-		}
-		target, err := rollbackTarget(s.db.WithContext(ctx), &m)
-		if err != nil || cr.RollbackOf == nil || target.ID != *cr.RollbackOf {
-			return &cr, fmt.Errorf("%w: rollback target changed", ErrStale)
-		}
+// findJob mencari job yang sudah dibuat untuk permintaan ini. Job dari permintaan sebelumnya tidak ikut
+// karena permintaan baru untuk migration yang sama hanya bisa diajukan setelah yang lama selesai.
+func findJob(tx *gorm.DB, cr *models.ChangeRequest) (string, error) {
+	q := tx.Model(&models.MigrationJob{}).
+		Where("migration_id = ? AND kind = ? AND created_at >= ?", cr.MigrationID, cr.Kind, cr.CreatedAt)
+	if cr.Kind == models.JobKindRollback && cr.RollbackOf != nil {
+		q = q.Where("rollback_of = ?", *cr.RollbackOf)
+	}
+	var ids []string
+	if err := q.Order("created_at").Limit(1).Pluck("id", &ids).Error; err != nil {
+		return "", err
+	}
+	if len(ids) == 0 {
+		return "", nil
+	}
+	return ids[0], nil
+}
+
+// checkStillValid memastikan rollback/forward yang sudah disetujui masih sesuai keadaan terkini.
+func checkStillValid(tx *gorm.DB, cr *models.ChangeRequest) error {
+	if cr.Kind == models.JobKindUp {
+		return nil
+	}
+	var m models.Migration
+	if err := tx.First(&m, "id = ?", cr.MigrationID).Error; err != nil {
+		return err
 	}
 	if cr.Kind == models.JobKindForward {
-		var m models.Migration
-		if err := s.db.WithContext(ctx).First(&m, "id = ?", cr.MigrationID).Error; err != nil {
-			return nil, err
+		if err := forwardCheck(tx, &m); err != nil {
+			return fmt.Errorf("%w: %w", ErrStale, err)
 		}
-		if err := forwardCheck(s.db.WithContext(ctx), &m); err != nil {
-			return &cr, fmt.Errorf("%w: %w", ErrStale, err)
-		}
+		return nil
 	}
+	target, err := rollbackTarget(tx, &m)
+	if err != nil || cr.RollbackOf == nil || target.ID != *cr.RollbackOf {
+		return fmt.Errorf("%w: rollback target changed", ErrStale)
+	}
+	return nil
+}
 
-	jobID, err := s.deps.Enqueue(ctx, cr)
-	if err != nil {
-		return &cr, fmt.Errorf("%w: %w", ErrDispatchFailed, err)
-	}
-	if err := s.db.WithContext(ctx).Model(&cr).
-		Where("job_id IS NULL").Update("job_id", jobID).Error; err != nil {
-		return &cr, err
-	}
-	cr.JobID = &jobID
-	return &cr, nil
+// hasInFlight: ada permintaan untuk migration ini yang masih menunggu review, sudah disetujui tetapi belum
+// masuk queue, atau sudah masuk queue tetapi jobnya belum selesai.
+func hasInFlight(tx *gorm.DB, migrationID string) (bool, error) {
+	var n int64
+	err := tx.Model(&models.ChangeRequest{}).
+		Where(`migration_id = ? AND (status = ? OR (status = ? AND (job_id IS NULL OR job_id IN (
+			SELECT id FROM migration_jobs WHERE status NOT IN ?))))`,
+			migrationID, models.ChangeRequestPendingReview, models.ChangeRequestApproved,
+			[]string{string(models.JobSuccess), string(models.JobFailed)}).
+		Count(&n).Error
+	return n > 0, err
 }
 
 func settle(tx *gorm.DB, cr *models.ChangeRequest, status models.ChangeRequestStatus, migration models.MigrationStatus) error {
@@ -295,23 +352,37 @@ func moveMigration(tx *gorm.DB, id string, from, to models.MigrationStatus) erro
 	return nil
 }
 
+type groupRow struct {
+	ConnectionID string
+	GroupID      string
+	GroupName    string
+	LeaderID     *string
+	LeaderName   *string
+}
+
+// queryGroups mengambil semua group yang punya akses (view maupun edit) ke database yang diberikan. Leader yang
+// akunnya sudah dihapus dianggap tidak ada, sehingga group-nya dihitung belum punya leader.
+func queryGroups(tx *gorm.DB, connectionIDs ...string) ([]groupRow, error) {
+	var rows []groupRow
+	err := tx.Table("groups AS g").
+		Select("gda.connection_id AS connection_id, g.id AS group_id, g.name AS group_name, u.id AS leader_id, "+
+			"COALESCE(NULLIF(u.name, ''), u.username) AS leader_name").
+		Joins("JOIN group_database_access AS gda ON gda.group_id = g.id").
+		Joins("LEFT JOIN users AS u ON u.id = g.leader_id AND u.deleted_at IS NULL").
+		Where("gda.connection_id IN ?", connectionIDs).
+		Order("g.id").Scan(&rows).Error
+	return rows, err
+}
+
 // Semua group yang punya akses (view maupun edit) ikut menentukan approval.
 func loadGroups(tx *gorm.DB, connectionID string) ([]workflow.Group, error) {
-	var rows []struct {
-		ID       string
-		LeaderID *string
-	}
-	err := tx.Table("groups AS g").
-		Select("g.id AS id, g.leader_id AS leader_id").
-		Joins("JOIN group_database_access AS gda ON gda.group_id = g.id").
-		Where("gda.connection_id = ?", connectionID).
-		Order("g.id").Scan(&rows).Error
+	rows, err := queryGroups(tx, connectionID)
 	if err != nil {
 		return nil, err
 	}
 	groups := make([]workflow.Group, 0, len(rows))
 	for _, r := range rows {
-		g := workflow.Group{ID: r.ID}
+		g := workflow.Group{ID: r.GroupID}
 		if r.LeaderID != nil {
 			g.LeaderID = *r.LeaderID
 		}

@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"web_backend/internal/api"
-	"web_backend/internal/database_handler"
+	databasehandler "web_backend/internal/database_handler"
 	"web_backend/internal/engine"
 	"web_backend/internal/models"
 	"web_backend/internal/observability"
@@ -79,11 +79,17 @@ func main() {
 		if workers := envInt("WORKER_COUNT", 2); workers > 0 {
 			eng.Start(workers)
 		}
-		coordinator := databasehandler.NewHandlerWithEngine(db, connService, eng).NewBatchCoordinator()
+		dbHandler := databasehandler.NewHandlerWithEngine(db, connService, eng)
+		coordinator := dbHandler.NewBatchCoordinator()
 		if recovered, err := coordinator.Recover(context.Background()); err != nil {
 			log.Printf("[WARN] Gagal memulihkan batch migration: %v", err)
 		} else if recovered > 0 {
 			log.Printf("Memulihkan %d batch migration yang terhenti", recovered)
+		}
+		if sent, err := dbHandler.RecoverApprovals(context.Background()); err != nil {
+			log.Printf("[WARN] Gagal mengirim ulang change request yang sudah disetujui: %v", err)
+		} else if sent > 0 {
+			log.Printf("Mengirim ulang %d change request yang sudah disetujui ke queue", sent)
 		}
 	}
 

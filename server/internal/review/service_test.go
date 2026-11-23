@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,16 +21,29 @@ import (
 var errInvalidDefinition = errors.New("invalid definition")
 
 type fakeQueue struct {
+	db    *gorm.DB
+	mu    sync.Mutex
 	calls []models.ChangeRequest
 	err   error
 }
 
+// enqueue membuat baris job sungguhan seperti engine, sehingga pencarian job dan aturan
+// "satu job aktif per migration" ikut teruji.
 func (q *fakeQueue) enqueue(_ context.Context, cr models.ChangeRequest) (string, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
 	if q.err != nil {
 		return "", q.err
 	}
+	job := models.MigrationJob{
+		ConnectionID: cr.ConnectionID, MigrationID: cr.MigrationID, ExecutionID: uuid.NewString(),
+		Kind: cr.Kind, Status: models.JobQueued, RollbackOf: cr.RollbackOf, RequestedBy: cr.RequestedBy,
+	}
+	if err := q.db.Create(&job).Error; err != nil {
+		return "", err
+	}
 	q.calls = append(q.calls, cr)
-	return uuid.NewString(), nil
+	return job.ID, nil
 }
 
 func validate(m *models.Migration) error {
@@ -73,7 +87,7 @@ func newEnv(t *testing.T) *env {
 		t.Fatal(err)
 	}
 
-	q := &fakeQueue{}
+	q := &fakeQueue{db: db}
 	e := &env{t: t, db: db, q: q, svc: New(db, Deps{Enqueue: q.enqueue, Validate: validate})}
 	conn := models.DBConnection{Name: "c1", Host: "h", DBName: "d", Username: "u", PasswordEnc: []byte("x")}
 	e.create(&conn)
@@ -612,5 +626,356 @@ func TestHistory_HideRollback(t *testing.T) {
 	}
 	if got, hidden := ids(true), want(e1+"#1", e4+"#1", e5+"#1", e5+"#2"); fmt.Sprint(got) != fmt.Sprint(hidden) {
 		t.Errorf("hide rollback = %v, mau %v (E2 dan E3 disembunyikan, attempt gagal tetap tampil)", got, hidden)
+	}
+}
+
+func TestSubmit_DeletedLeaderCountsAsNoLeader(t *testing.T) {
+	e := newEnv(t)
+	if err := e.db.Delete(&models.User{}, "id = ?", e.leaderB).Error; err != nil {
+		t.Fatal(err)
+	}
+	m := e.migration(models.MigrationDraft, "DROP TABLE x", false)
+
+	if _, err := e.svc.Submit(ctx, e.editor, e.connID, m.ID, models.JobKindUp); !errors.Is(err, ErrGroupsWithoutLeader) {
+		t.Fatalf("error = %v", err)
+	}
+	if got := e.migrationStatus(m.ID); got != models.MigrationDraft {
+		t.Errorf("status harus tetap draft, dapat %s", got)
+	}
+}
+
+func TestApprove_LeaderOfBothGroupsCanReapproveAfterLeaderChange(t *testing.T) {
+	e := newEnv(t)
+	cr := e.submit(e.migration(models.MigrationDraft, "DROP TABLE x", false), models.JobKindUp)
+	if _, err := e.svc.Approve(ctx, e.leaderA, cr.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	// Leader A kini memimpin kedua group; tidak ada keputusan baru yang memicu evaluasi ulang selain approve ulang ini.
+	if err := e.db.Model(&models.Group{}).Where("name = ?", "B").Update("leader_id", e.leaderA).Error; err != nil {
+		t.Fatal(err)
+	}
+	got, err := e.svc.Approve(ctx, e.leaderA, cr.ID, "")
+	if err != nil {
+		t.Fatalf("approve ulang: %v", err)
+	}
+	if got.Status != models.ChangeRequestApproved || got.JobID == nil || len(e.q.calls) != 1 {
+		t.Errorf("setelah approve ulang: %+v, calls=%d", got, len(e.q.calls))
+	}
+	if e.migrationStatus(cr.MigrationID) != models.MigrationApproved {
+		t.Errorf("status migration = %s, mau approved", e.migrationStatus(cr.MigrationID))
+	}
+}
+
+func TestApprove_ReapproveWithoutLeaderChangeStaysPending(t *testing.T) {
+	e := newEnv(t)
+	cr := e.submit(e.migration(models.MigrationDraft, "DROP TABLE x", false), models.JobKindUp)
+	if _, err := e.svc.Approve(ctx, e.leaderA, cr.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.svc.Reject(ctx, e.leaderA, cr.ID, ""); !errors.Is(err, ErrAlreadyDecided) {
+		t.Errorf("reject setelah approve: %v", err)
+	}
+	if _, err := e.svc.Approve(ctx, e.leaderA, cr.ID, ""); !errors.Is(err, ErrAlreadyDecided) {
+		t.Errorf("approve ulang tanpa perubahan: %v", err)
+	}
+	if got := e.request(cr.ID); got.Status != models.ChangeRequestPendingReview || len(e.q.calls) != 0 {
+		t.Errorf("harus tetap menunggu review: %+v, calls=%d", got, len(e.q.calls))
+	}
+}
+
+func TestEnrich_ShowsApprovalProgress(t *testing.T) {
+	e := newEnv(t)
+	m := e.migration(models.MigrationDraft, "DROP TABLE x", false)
+	cr := e.submit(m, models.JobKindUp)
+	if _, err := e.svc.Approve(ctx, e.leaderA, cr.ID, "lgtm"); err != nil {
+		t.Fatal(err)
+	}
+
+	forB := e.request(cr.ID)
+	if err := e.svc.Enrich(ctx, e.leaderB, &forB); err != nil {
+		t.Fatal(err)
+	}
+	if forB.MigrationName != m.Name || forB.ConnectionName != "c1" || forB.RequestedByName != "editor" {
+		t.Errorf("nama turunan = %q / %q / %q", forB.MigrationName, forB.ConnectionName, forB.RequestedByName)
+	}
+	if len(forB.Reviewers) != 2 {
+		t.Fatalf("reviewers = %+v", forB.Reviewers)
+	}
+	byGroup := make(map[string]models.Reviewer)
+	for _, r := range forB.Reviewers {
+		byGroup[r.GroupName] = r
+	}
+	if a := byGroup["A"]; a.Decision != "approve" || a.Comment != "lgtm" || a.DecidedAt == nil || a.LeaderName == nil || *a.LeaderName != "leader-a" {
+		t.Errorf("group A = %+v", a)
+	}
+	if b := byGroup["B"]; b.Decision != models.ReviewerPending || b.DecidedAt != nil {
+		t.Errorf("group B = %+v", b)
+	}
+	if !forB.CanDecide {
+		t.Error("leader B belum memutuskan, can_decide harus true")
+	}
+
+	for name, user := range map[string]string{"leader A (sudah setuju)": e.leaderA, "editor": e.editor, "outside": e.outside, "anonim": ""} {
+		got := e.request(cr.ID)
+		if err := e.svc.Enrich(ctx, user, &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.CanDecide {
+			t.Errorf("%s: can_decide harus false", name)
+		}
+	}
+
+	e.approveRest(cr)
+	done := e.request(cr.ID)
+	if err := e.svc.Enrich(ctx, e.leaderB, &done); err != nil {
+		t.Fatal(err)
+	}
+	if done.CanDecide || len(done.Reviewers) != 2 {
+		t.Errorf("setelah diputuskan: can_decide=%v reviewers=%+v", done.CanDecide, done.Reviewers)
+	}
+	for _, r := range done.Reviewers {
+		if r.Decision != "approve" || r.LeaderName == nil {
+			t.Errorf("keputusan tercatat = %+v", r)
+		}
+	}
+}
+
+func TestEnrich_RejectedRequestListsRecordedDecisionOnly(t *testing.T) {
+	e := newEnv(t)
+	cr := e.submit(e.migration(models.MigrationDraft, "DROP TABLE x", false), models.JobKindUp)
+	if _, err := e.svc.Reject(ctx, e.leaderB, cr.ID, "terlalu berisiko"); err != nil {
+		t.Fatal(err)
+	}
+
+	got := e.request(cr.ID)
+	if err := e.svc.Enrich(ctx, e.leaderA, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Reviewers) != 1 || got.Reviewers[0].Decision != "reject" || got.Reviewers[0].Comment != "terlalu berisiko" {
+		t.Errorf("reviewers = %+v", got.Reviewers)
+	}
+	if got.CanDecide {
+		t.Error("permintaan yang sudah ditolak tidak bisa diputuskan lagi")
+	}
+}
+
+func TestPendingFor_ListsOnlyUndecidedRequestsOfLeader(t *testing.T) {
+	e := newEnv(t)
+	cr := e.submit(e.migration(models.MigrationDraft, "DROP TABLE x", false), models.JobKindUp)
+
+	pending := func(user string) []models.ChangeRequest {
+		t.Helper()
+		got, err := e.svc.PendingFor(ctx, user, 50)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	if got := pending(e.leaderA); len(got) != 1 || got[0].ID != cr.ID {
+		t.Fatalf("leader A = %+v", got)
+	}
+	if got := pending(e.leaderB); len(got) != 1 {
+		t.Fatalf("leader B = %+v", got)
+	}
+	for name, user := range map[string]string{"editor": e.editor, "viewer": e.viewer, "outside": e.outside, "bukan-uuid": "u1"} {
+		if got := pending(user); len(got) != 0 {
+			t.Errorf("%s bukan leader: %+v", name, got)
+		}
+	}
+
+	if _, err := e.svc.Approve(ctx, e.leaderA, cr.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := pending(e.leaderA); len(got) != 0 {
+		t.Errorf("leader A sudah memutuskan: %+v", got)
+	}
+	if got := pending(e.leaderB); len(got) != 1 {
+		t.Errorf("leader B masih harus memutuskan: %+v", got)
+	}
+
+	e.approveRest(cr)
+	if got := pending(e.leaderB); len(got) != 0 {
+		t.Errorf("permintaan sudah selesai: %+v", got)
+	}
+}
+
+func TestRedispatchApproved_SendsRequestsThatNeverReachedTheQueue(t *testing.T) {
+	e := newEnv(t)
+	cr := e.submit(e.migration(models.MigrationDraft, "DROP TABLE x", false), models.JobKindUp)
+	e.q.err = errors.New("queue down")
+	if _, err := e.svc.Approve(ctx, e.leaderA, cr.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.svc.Approve(ctx, e.leaderB, cr.ID, ""); !errors.Is(err, ErrDispatchFailed) {
+		t.Fatalf("error = %v", err)
+	}
+
+	if n, err := e.svc.RedispatchApproved(ctx); err != nil || n != 0 {
+		t.Fatalf("queue masih mati: n=%d err=%v", n, err)
+	}
+	if got := e.request(cr.ID); got.JobID != nil {
+		t.Fatalf("job tidak boleh terisi: %+v", got)
+	}
+
+	e.q.err = nil
+	if n, err := e.svc.RedispatchApproved(ctx); err != nil || n != 1 {
+		t.Fatalf("setelah queue pulih: n=%d err=%v", n, err)
+	}
+	if got := e.request(cr.ID); got.JobID == nil || len(e.q.calls) != 1 {
+		t.Errorf("job harus terisi: %+v calls=%d", got, len(e.q.calls))
+	}
+	if n, err := e.svc.RedispatchApproved(ctx); err != nil || n != 0 || len(e.q.calls) != 1 {
+		t.Errorf("tidak ada lagi yang perlu dikirim: n=%d err=%v calls=%d", n, err, len(e.q.calls))
+	}
+}
+
+// approveRest menyetujui sebagai leader B (leader A diasumsikan sudah memutuskan).
+func (e *env) approveRest(cr *models.ChangeRequest) {
+	e.t.Helper()
+	if _, err := e.svc.Approve(ctx, e.leaderB, cr.ID, ""); err != nil {
+		e.t.Fatalf("approve leader B: %v", err)
+	}
+}
+
+// approveWhileQueueIsDown menyetujui sebagai kedua leader saat queue mati: permintaan tersimpan sebagai approved tanpa job.
+func (e *env) approveWhileQueueIsDown(cr *models.ChangeRequest) {
+	e.t.Helper()
+	e.q.err = errors.New("queue down")
+	if _, err := e.svc.Approve(ctx, e.leaderA, cr.ID, ""); err != nil {
+		e.t.Fatal(err)
+	}
+	if _, err := e.svc.Approve(ctx, e.leaderB, cr.ID, ""); !errors.Is(err, ErrDispatchFailed) {
+		e.t.Fatalf("approve terakhir: %v", err)
+	}
+	e.q.err = nil
+}
+
+func TestRollback_DuplicateWhileInFlightIsBlocked(t *testing.T) {
+	e := newEnv(t)
+	m := e.migration(models.MigrationSuccess, "DROP TABLE x", false)
+	e.execution(m, uuid.NewString(), 1, models.JobKindUp, models.ExecutionSuccess, nil)
+	submit := func() error {
+		_, err := e.svc.Submit(ctx, e.editor, e.connID, m.ID, models.JobKindRollback)
+		return err
+	}
+	cr := e.submit(m, models.JobKindRollback)
+
+	if err := submit(); !errors.Is(err, ErrAlreadyPending) {
+		t.Fatalf("menunggu review: %v", err)
+	}
+
+	e.approveWhileQueueIsDown(cr)
+	if err := submit(); !errors.Is(err, ErrAlreadyPending) {
+		t.Fatalf("disetujui tapi belum masuk queue: %v", err)
+	}
+
+	got, err := e.svc.Dispatch(ctx, cr.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := submit(); !errors.Is(err, ErrAlreadyPending) {
+		t.Fatalf("job masih berjalan: %v", err)
+	}
+
+	// Job gagal tidak mengubah apa pun, jadi pengajuan baru boleh.
+	if err := e.db.Model(&models.MigrationJob{}).Where("id = ?", *got.JobID).
+		Update("status", models.JobFailed).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := submit(); err != nil {
+		t.Errorf("setelah job selesai: %v", err)
+	}
+}
+
+func TestForward_DuplicateWhileInFlightIsBlocked(t *testing.T) {
+	e := newEnv(t)
+	m := e.migration(models.MigrationSuccess, "DROP TABLE x", false)
+	up := uuid.NewString()
+	e.execution(m, up, 1, models.JobKindUp, models.ExecutionSuccess, nil)
+	e.execution(m, uuid.NewString(), 1, models.JobKindRollback, models.ExecutionSuccess, &up)
+	cr := e.submit(m, models.JobKindForward)
+	e.approveWhileQueueIsDown(cr)
+
+	if _, err := e.svc.Submit(ctx, e.editor, e.connID, m.ID, models.JobKindForward); !errors.Is(err, ErrAlreadyPending) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestDispatch_ReusesJobCreatedBeforeLinkWasSaved(t *testing.T) {
+	e := newEnv(t)
+	cr := e.submit(e.migration(models.MigrationDraft, "DROP TABLE x", false), models.JobKindUp)
+	e.approveWhileQueueIsDown(cr)
+
+	// Enqueue sebelumnya sebenarnya berhasil, tetapi job_id belum sempat tersimpan.
+	jobID, err := e.q.enqueue(ctx, e.request(cr.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := e.svc.Dispatch(ctx, cr.ID)
+
+	if err != nil || got.JobID == nil || *got.JobID != jobID {
+		t.Fatalf("dispatch = %+v, %v; mau job %s", got, err, jobID)
+	}
+	if len(e.q.calls) != 1 {
+		t.Errorf("queue dipanggil %d kali, mau 1 (tanpa job ganda)", len(e.q.calls))
+	}
+}
+
+func TestDispatch_LinksFinishedJobInsteadOfReportingStale(t *testing.T) {
+	e := newEnv(t)
+	m := e.migration(models.MigrationSuccess, "DROP TABLE x", false)
+	e.execution(m, uuid.NewString(), 1, models.JobKindUp, models.ExecutionSuccess, nil)
+	cr := e.submit(m, models.JobKindRollback)
+	e.approveWhileQueueIsDown(cr)
+
+	// Job sempat dibuat dan sudah selesai (rollback tercatat), tetapi job_id belum tersimpan.
+	jobID, err := e.q.enqueue(ctx, e.request(cr.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.db.Model(&models.MigrationJob{}).Where("id = ?", jobID).
+		Update("status", models.JobSuccess).Error; err != nil {
+		t.Fatal(err)
+	}
+	e.execution(m, uuid.NewString(), 1, models.JobKindRollback, models.ExecutionSuccess, e.request(cr.ID).RollbackOf)
+
+	got, err := e.svc.Dispatch(ctx, cr.ID)
+
+	if err != nil || got.JobID == nil || *got.JobID != jobID {
+		t.Fatalf("dispatch = %+v, %v; mau job %s", got, err, jobID)
+	}
+}
+
+func TestDispatch_ConcurrentCallsEnqueueOnce(t *testing.T) {
+	e := newEnv(t)
+	cr := e.submit(e.migration(models.MigrationDraft, "DROP TABLE x", false), models.JobKindUp)
+	e.approveWhileQueueIsDown(cr)
+
+	const callers = 4
+	ids := make([]string, callers)
+	errs := make([]error, callers)
+	var wg sync.WaitGroup
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			got, err := e.svc.Dispatch(ctx, cr.ID)
+			errs[i] = err
+			if got != nil && got.JobID != nil {
+				ids[i] = *got.JobID
+			}
+		}()
+	}
+	wg.Wait()
+
+	for i := range ids {
+		if errs[i] != nil || ids[i] == "" || ids[i] != ids[0] {
+			t.Fatalf("pemanggil %d: id=%q err=%v (id pertama %q)", i, ids[i], errs[i], ids[0])
+		}
+	}
+	if len(e.q.calls) != 1 {
+		t.Errorf("queue dipanggil %d kali, mau 1", len(e.q.calls))
 	}
 }

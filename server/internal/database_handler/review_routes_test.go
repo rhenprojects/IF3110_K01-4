@@ -169,3 +169,124 @@ func TestIntegrationChangeRequestRequiresLeaders(t *testing.T) {
 		t.Errorf("submit tanpa leader = %d, mau 409 (%s)", status, raw)
 	}
 }
+
+func TestIntegrationChangeRequestProgressAndInbox(t *testing.T) {
+	e := setup(t)
+	leaderA, leaderB := e.assignLeaders()
+	table := pgx.Identifier{e.schema, "cr_inbox"}.Sanitize()
+	m := e.createMigration(e.editor, "add cr_inbox", "CREATE TABLE IF NOT EXISTS "+table+" (id int)")
+
+	status, cr, raw := e.submit(e.editor, m.ID, models.JobKindUp)
+	if status != fiber.StatusCreated {
+		t.Fatalf("submit: status %d body %s", status, raw)
+	}
+	if cr.MigrationName != "add cr_inbox" || len(cr.Reviewers) != 2 || cr.CanDecide {
+		t.Errorf("respons submit = %+v", cr)
+	}
+	for _, r := range cr.Reviewers {
+		if r.Decision != models.ReviewerPending || r.LeaderID == nil || r.GroupName == "" {
+			t.Errorf("reviewer = %+v", r)
+		}
+	}
+
+	inbox := func(user string) []models.ChangeRequest {
+		t.Helper()
+		var resp models.ChangeRequestListResponse
+		if status, raw := e.do(user, "GET", "/change-requests/pending", nil, &resp); status != fiber.StatusOK {
+			t.Fatalf("inbox: status %d body %s", status, raw)
+		}
+		return resp.ChangeRequests
+	}
+	if status, _ := e.do("", "GET", "/change-requests/pending", nil, nil); status != fiber.StatusUnauthorized {
+		t.Errorf("inbox tanpa login = %d, mau 401", status)
+	}
+	if got := inbox(e.editor); len(got) != 0 {
+		t.Errorf("inbox non-leader = %+v", got)
+	}
+	got := inbox(leaderA)
+	if len(got) != 1 || got[0].ID != cr.ID || !got[0].CanDecide || got[0].ConnectionName == "" || got[0].RequestedByName == "" {
+		t.Fatalf("inbox leader A = %+v", got)
+	}
+
+	status, first, raw := e.decide(leaderA, cr.ID, "approve")
+	if status != fiber.StatusOK || first.Status != models.ChangeRequestPendingReview || first.CanDecide {
+		t.Fatalf("approve leader A: status %d body %s", status, raw)
+	}
+	approvedBy := 0
+	for _, r := range first.Reviewers {
+		if r.Decision == "approve" {
+			approvedBy++
+		}
+	}
+	if approvedBy != 1 {
+		t.Errorf("progres setelah leader A = %+v", first.Reviewers)
+	}
+	if got := inbox(leaderA); len(got) != 0 {
+		t.Errorf("inbox leader A setelah approve = %+v", got)
+	}
+	if got := inbox(leaderB); len(got) != 1 {
+		t.Errorf("inbox leader B = %+v", got)
+	}
+
+	list := func(query string) (int, []models.ChangeRequest) {
+		var resp models.ChangeRequestListResponse
+		status, _ := e.do(e.viewer, "GET", e.dbPath("change-requests")+query, nil, &resp)
+		return status, resp.ChangeRequests
+	}
+	if status, got := list("?status=pending_review"); status != fiber.StatusOK || len(got) != 1 || len(got[0].Reviewers) != 2 {
+		t.Errorf("filter pending_review = %d %+v", status, got)
+	}
+	if status, got := list("?status=approved"); status != fiber.StatusOK || len(got) != 0 {
+		t.Errorf("filter approved = %d %+v", status, got)
+	}
+	if status, _ := list("?status=bogus"); status != fiber.StatusBadRequest {
+		t.Errorf("filter tidak valid = %d, mau 400", status)
+	}
+
+	status, done, raw := e.decide(leaderB, cr.ID, "approve")
+	if status != fiber.StatusOK || done.Status != models.ChangeRequestApproved || done.JobID == nil {
+		t.Fatalf("approve leader B: status %d body %s", status, raw)
+	}
+	e.waitJob(*done.JobID)
+	if got := inbox(leaderB); len(got) != 0 {
+		t.Errorf("inbox setelah selesai = %+v", got)
+	}
+	if status, got := list("?status=approved"); status != fiber.StatusOK || len(got) != 1 || got[0].ID != cr.ID {
+		t.Errorf("filter approved setelah selesai = %d %+v", status, got)
+	}
+}
+
+func TestIntegrationDispatchChangeRequest(t *testing.T) {
+	e := setup(t)
+	leaderA, leaderB := e.assignLeaders()
+	table := pgx.Identifier{e.schema, "cr_dispatch"}.Sanitize()
+	m := e.createMigration(e.editor, "add cr_dispatch", "CREATE TABLE IF NOT EXISTS "+table+" (id int)")
+	_, cr, _ := e.submit(e.editor, m.ID, models.JobKindUp)
+
+	dispatch := func(user, requestID string) (int, models.ChangeRequest) {
+		var got models.ChangeRequest
+		status, _ := e.do(user, "POST", e.dbPath("change-requests", requestID, "dispatch"), nil, &got)
+		return status, got
+	}
+	if status, _ := dispatch(e.editor, cr.ID); status != fiber.StatusConflict {
+		t.Errorf("dispatch sebelum approved = %d, mau 409", status)
+	}
+	if status, _ := dispatch(e.viewer, cr.ID); status != fiber.StatusForbidden {
+		t.Errorf("dispatch oleh viewer = %d, mau 403", status)
+	}
+	if status, _ := dispatch(e.outsider, cr.ID); status != fiber.StatusForbidden {
+		t.Errorf("dispatch tanpa akses = %d, mau 403", status)
+	}
+	if status, _ := dispatch(e.editor, uuid.NewString()); status != fiber.StatusNotFound {
+		t.Errorf("dispatch permintaan tidak ada = %d, mau 404", status)
+	}
+
+	job := e.approveAndWait(cr, leaderA, leaderB)
+	status, again := dispatch(e.editor, cr.ID)
+	if status != fiber.StatusOK || again.JobID == nil || *again.JobID != job.ID {
+		t.Errorf("dispatch ulang harus idempoten: status %d, %+v", status, again)
+	}
+	if len(again.Reviewers) != 2 {
+		t.Errorf("respons dispatch harus diperkaya: %+v", again)
+	}
+}
