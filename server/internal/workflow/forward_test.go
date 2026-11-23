@@ -66,6 +66,17 @@ func TestCheckForward(t *testing.T) {
 			},
 		},
 		{
+			name:      "B gagal lalu C berhasil: B tidak boleh di-forward setelah C",
+			migration: "B",
+			order:     order,
+			history: []Execution{
+				up("E1", "A", StatusSuccess),
+				up("E2", "B", StatusFailed),
+				up("E3", "C", StatusSuccess),
+			},
+			wantErr: ErrOutOfOrder,
+		},
+		{
 			name:      "rollback gagal: migration tetap aktif",
 			migration: "B",
 			order:     order,

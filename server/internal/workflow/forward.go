@@ -49,5 +49,10 @@ func CheckForward(migrationID string, order []string, history []Execution) error
 			return fmt.Errorf("%w: %s harus aktif lebih dulu", ErrOutOfOrder, prev)
 		}
 	}
+	for _, next := range order[idx+1:] {
+		if active[next] {
+			return fmt.Errorf("%w: %s masih aktif, rollback lebih dulu", ErrOutOfOrder, next)
+		}
+	}
 	return nil
 }
