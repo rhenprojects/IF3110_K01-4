@@ -67,7 +67,12 @@ func (h *GroupHandler) CreateGroup(c *fiber.Ctx) error {
 		return writeError(c, err)
 	}
 
-	group := models.Group{Name: name, Description: description, MemberIDs: []string{}}
+	leaderID, err := h.validateLeader(req.LeaderID)
+	if err != nil {
+		return writeError(c, err)
+	}
+
+	group := models.Group{Name: name, Description: description, LeaderID: leaderID, MemberIDs: []string{}}
 	if err := h.DB.Create(&group).Error; err != nil {
 		return writeError(c, translateDBError(err))
 	}
@@ -124,6 +129,13 @@ func (h *GroupHandler) UpdateGroup(c *fiber.Ctx) error {
 			return writeError(c, err)
 		}
 		group.Description = description
+	}
+	if req.LeaderID != nil {
+		leaderID, err := h.validateLeader(req.LeaderID)
+		if err != nil {
+			return writeError(c, err)
+		}
+		group.LeaderID = leaderID
 	}
 
 	if err := h.DB.Save(group).Error; err != nil {
@@ -452,6 +464,23 @@ func (h *GroupHandler) RemoveAccess(c *fiber.Ctx) error {
 		return writeError(c, ErrAccessNotFind)
 	}
 	return c.SendStatus(fiber.StatusNoContent)
+}
+
+func (h *GroupHandler) validateLeader(id *string) (*string, error) {
+	if id == nil {
+		return nil, nil
+	}
+	if _, err := uuid.Parse(*id); err != nil {
+		return nil, &ValidationError{"leader_id", "unknown user id"}
+	}
+	var count int64
+	if err := h.DB.Model(&models.User{}).Where("id = ?", *id).Count(&count).Error; err != nil {
+		return nil, err
+	}
+	if count == 0 {
+		return nil, &ValidationError{"leader_id", "unknown user id"}
+	}
+	return id, nil
 }
 
 func (h *GroupHandler) findGroup(id string) (*models.Group, error) {

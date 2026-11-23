@@ -245,8 +245,8 @@ Aturan: `name` wajib, maksimal 100 karakter, harus unik (`409` kalau sudah ada).
 | Endpoint | Fungsi |
 |---|---|
 | `GET /admin/groups` | Daftar group. Response `{ "groups": [Group, ...] }` |
-| `POST /admin/groups` | Buat group. Body `{ name, description? }`. Response `201` + `Group` |
-| `PUT /admin/groups/:id` | Ubah nama/deskripsi. Body `{ name, description? }`. Response `200` + `Group` |
+| `POST /admin/groups` | Buat group. Body `{ name, description?, leader_id? }`. Response `201` + `Group`. `400` (`field: "leader_id"`) kalau user tidak dikenal |
+| `PUT /admin/groups/:id` | Ubah nama/deskripsi/leader. Body `{ name, description?, leader_id? }`. Response `200` + `Group`. `leader_id` yang tidak dikirim tidak mengubah leader |
 | `DELETE /admin/groups/:id` | Hapus group beserta keanggotaan dan aksesnya. Response `204` |
 | `PUT /admin/groups/:id/members` | **Mengganti seluruh** daftar anggota. Body `{ "user_ids": ["…"] }`. Response `200` + `Group`. `400` (`field: "user_ids"`) kalau ada ID user yang tidak dikenal |
 | `GET /admin/groups/:id/access` | Lihat akses database group ini. Response `{ "access": [{ "connection_id": "…", "level": "view" }] }` |

@@ -142,6 +142,38 @@ func TestIntegrationGroupCRUD(t *testing.T) {
 	}
 }
 
+func TestIntegrationGroupLeader(t *testing.T) {
+	app, db := setup(t)
+	first, second := createUser(t, db, "leader-one"), createUser(t, db, "leader-two")
+
+	status, created, raw := do(t, app, "POST", "/admin/groups", map[string]any{
+		"name": "ops", "leader_id": first.ID,
+	}, adminHeaders)
+	if status != fiber.StatusCreated || created["leader_id"] != first.ID {
+		t.Fatalf("create with leader: status %d, body %s", status, raw)
+	}
+	id, _ := created["id"].(string)
+
+	status, body, raw := do(t, app, "PUT", "/admin/groups/"+id, map[string]any{"leader_id": second.ID}, adminHeaders)
+	if status != fiber.StatusOK || body["leader_id"] != second.ID {
+		t.Errorf("change leader: status %d, body %s", status, raw)
+	}
+
+	status, body, raw = do(t, app, "PUT", "/admin/groups/"+id, map[string]any{"name": "ops2"}, adminHeaders)
+	if status != fiber.StatusOK || body["leader_id"] != second.ID {
+		t.Errorf("update without leader_id must keep leader: status %d, body %s", status, raw)
+	}
+
+	for _, bad := range []string{"not-a-uuid", "00000000-0000-0000-0000-000000000000"} {
+		if status, _, raw = do(t, app, "PUT", "/admin/groups/"+id, map[string]any{"leader_id": bad}, adminHeaders); status != fiber.StatusBadRequest {
+			t.Errorf("leader %q: status %d, body %s, want 400", bad, status, raw)
+		}
+		if status, _, raw = do(t, app, "POST", "/admin/groups", map[string]any{"name": "bad-" + bad, "leader_id": bad}, adminHeaders); status != fiber.StatusBadRequest {
+			t.Errorf("create with leader %q: status %d, body %s, want 400", bad, status, raw)
+		}
+	}
+}
+
 func TestIntegrationMembership(t *testing.T) {
 	app, db := setup(t)
 	_, group, _ := do(t, app, "POST", "/admin/groups", map[string]any{"name": "engineering"}, adminHeaders)
