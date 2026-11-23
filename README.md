@@ -7,7 +7,8 @@ Platform untuk mengelola akses ke database PostgreSQL bersama: pengguna masuk, m
 
 ```
 Login → Access Control → Pilih Database → Lihat Schema/Data
-      → Buat Migration → Eksekusi → Commit/Rollback → Riwayat Migration
+      → Buat Migration → Review & Approval Leader → Queue → Worker
+      → Commit/Rollback → Riwayat Migration
 ```
 
 ## Fitur
@@ -18,7 +19,10 @@ Login → Access Control → Pilih Database → Lihat Schema/Data
 - **Akses lewat group**: setiap group diberi level `view` (View Only) atau `edit` (View + Edit) per database.
 - **Koneksi database**: koneksi ke satu atau lebih database PostgreSQL; password disimpan terenkripsi (AES-256-GCM); kegagalan koneksi ditangani dengan pesan yang aman.
 - **Database viewer**: schema, table, column, constraint, index, dan isi tabel dengan paging.
-- **Migration**: editor SQL, eksekusi dalam transaction (commit jika berhasil, rollback jika gagal), versi linear per database, dan riwayat lengkap (versi, SQL, pelaksana, waktu, status).
+- **Migration**: editor SQL up/down (atau ditandai irreversible), eksekusi asynchronous lewat queue dan worker dalam transaction (commit jika berhasil, rollback jika gagal), versi linear per database, dan riwayat lengkap (versi, SQL, pelaksana, waktu, status).
+- **Workflow & approval**: setiap perubahan (up, rollback, forward) harus disetujui Team Leader dari setiap group yang punya akses ke database tersebut sebelum masuk queue.
+- **Rollback & Forward**: membatalkan migration aktif terakhir dengan SQL down, lalu menerapkannya kembali dengan forward. Riwayat punya opsi **Hide rollback**.
+- **SPA responsif**: seluruh halaman dapat dipakai di desktop maupun mobile.
 
 ## Struktur repositori
 
@@ -32,7 +36,10 @@ Login → Access Control → Pilih Database → Lihat Schema/Data
 | `server/internal/user_handler/` | Login, session, CRUD user |
 | `server/internal/group_handler/` | CRUD group, keanggotaan, pemberian akses database |
 | `server/internal/targetdb/` | Koneksi database target: enkripsi kredensial, pool, test koneksi |
-| `server/internal/database_handler/` | Viewer schema/data dan migration |
+| `server/internal/database_handler/` | Viewer schema/data, migration, dan change request |
+| `server/internal/workflow/` | Aturan murni: status migration, evaluasi approval leader, eligibility rollback/forward, Hide rollback |
+| `server/internal/review/` | Service change request: pengajuan, approve/reject, dispatch ke queue |
+| `server/internal/engine/` | Queue, worker, lock per database, dan eksekusi SQL |
 | `server/internal/models/` | Model tabel platform dan tipe response API |
 | `frontend/` | Frontend React + Vite + TypeScript + Tailwind |
 | `docs/` | Kontrak API, schema database, checklist pengujian |
@@ -72,8 +79,8 @@ Lalu di aplikasi (sebagai admin):
 
 1. **Connections** → tambah koneksi: host **`db`** (nama service Docker, bukan `localhost`), port `5432`, database `toko_demo`, user `postgres`, password `postgres`, SSL `disable`.
 2. **Users** → buat user, misalnya `budi` dan `siti`.
-3. **Groups** → buat group, masukkan anggota, dan beri akses ke `toko_demo`: `edit` untuk `budi`, `view` untuk `siti`.
-4. Login sebagai `budi` untuk melihat schema/data serta membuat dan menjalankan migration. Login sebagai `siti` untuk melihat bahwa View Only hanya bisa melihat.
+3. **Groups** → buat group, masukkan anggota, beri akses ke `toko_demo` (`edit` untuk `budi`, `view` untuk `siti`), lalu edit group untuk memilih **Team Leader** dari anggotanya. Setiap group yang punya akses wajib punya leader.
+4. Login sebagai `budi` untuk melihat schema/data, membuat migration, dan mengajukan review. Login sebagai leader di halaman **Review** untuk menyetujui; setelah semua leader setuju, migration masuk queue dan dijalankan worker. Login sebagai `siti` untuk melihat bahwa View Only hanya bisa melihat.
 
 Admin sendiri **tidak** otomatis bisa membuka isi database (lihat [Keputusan desain](#keputusan-desain)); masukkan admin ke group jika perlu.
 
@@ -116,6 +123,7 @@ Buka http://localhost:5173. Permintaan `/api` diteruskan ke `localhost:9000` ole
 | `SESSION_HASH_KEY`, `SESSION_BLOCK_KEY` | disarankan | Key untuk menandatangani dan mengenkripsi cookie session (block key 16/24/32 byte). Tanpa ini dipakai key acak, sehingga semua user harus login ulang setelah restart |
 | `APP_ENV=production` atau `COOKIE_SECURE=true` | production | Mengaktifkan atribut `Secure` pada cookie (wajib untuk HTTPS) |
 | `PORT` | tidak | Port backend, default `9000` |
+| `WORKER_COUNT` | tidak | Jumlah worker migration, default `2` |
 | `DEV_AUTH=true` | **jangan di production** | Hanya untuk development/test: identitas diambil dari header `X-Debug-User` |
 
 Nilai di `deploy/docker-compose.yml` dan `scripts/invoker.sh` hanya untuk development dan pengujian.
@@ -170,7 +178,7 @@ Saat login backend membuat token CSRF per session dan mengirimnya lewat cookie `
 - Akses database diberikan ke **group**, bukan langsung ke user.
 - **Akses efektif**: jika user ada di beberapa group yang mengakses database yang sama, diambil level tertinggi (`edit` > `view` > tanpa akses). Dihitung ulang di setiap request, sehingga perubahan group langsung berlaku.
 - **Platform Admin bukan tingkat akses database**: admin mengelola platform tetapi tidak otomatis bisa melihat atau mengubah isi database.
-- View Only: melihat schema, data, serta riwayat dan detail migration. View + Edit: seluruh akses View Only, ditambah membuat, mengubah, dan menjalankan migration.
+- View Only: melihat schema, data, serta riwayat dan detail migration. View + Edit: seluruh akses View Only, ditambah membuat, mengubah, dan mengajukan migration (up, rollback, forward) untuk dijalankan. Persetujuan dilakukan oleh Team Leader.
 
 ### Database viewer
 
@@ -180,12 +188,23 @@ Saat login backend membuat token CSRF per session dan mengirimnya lewat cookie `
 
 ### Migration
 
-- Migration dibuat sebagai `draft` dan hanya draft yang bisa diubah atau dijalankan.
-- Eksekusi berjalan dalam satu transaction: jika ada statement yang gagal, seluruh perubahan di-rollback dan migration berstatus `failed` beserta pesan errornya. Migration yang gagal tidak bisa dijalankan ulang; buat migration baru.
+- Migration dibuat sebagai `draft` dan hanya draft yang bisa diubah atau diajukan untuk review.
+- Eksekusi berjalan dalam satu transaction: jika ada statement yang gagal, seluruh perubahan di-rollback dan migration berstatus `failed` beserta pesan errornya. Migration yang gagal bisa dijalankan ulang lewat Forward (perlu approval lagi) atau diganti dengan migration baru.
 - Nomor versi (1, 2, 3, …) diberikan hanya untuk migration yang berhasil, sehingga riwayat setiap database linear.
 - Riwayat dicatat sebelum commit di database target, sehingga riwayat dan isi database tidak bisa berbeda.
 - Dalam satu waktu hanya satu migration yang boleh berjalan per database.
 - Perintah yang tidak bisa berjalan di dalam transaction (misalnya `CREATE INDEX CONCURRENTLY`, `VACUUM`) tidak didukung.
+
+### Workflow, approval, rollback, dan forward
+
+- Status: `Draft → Pending Review → Approved → Queue → Running → Success/Failed`.
+- Yang mengajukan harus View + Edit. Pengajuan ditolak jika ada group dengan akses yang belum punya leader.
+- Perlu persetujuan leader dari **setiap group** yang punya akses (view maupun edit); leader yang memimpin beberapa group cukup menyetujui sekali. Satu penolakan membatalkan pengajuan dan migration up kembali menjadi `draft`.
+- Setelah leader terakhir menyetujui, permintaan otomatis masuk queue. Rollback dan forward juga lewat alur yang sama.
+- **Rollback** memakai SQL down asli dan hanya untuk migration aktif terakhir yang reversible (urutan A → B → C: rollback C dulu). Migration irreversible tidak bisa di-rollback.
+- **Forward** menjalankan ulang SQL up migration yang di-rollback atau gagal, mengikuti urutan linear, dan tidak otomatis menjalankan migration berikutnya.
+- SQL migration yang sudah dieksekusi tidak bisa diubah; perbaikan dibuat sebagai migration baru.
+- Halaman **Riwayat eksekusi** menampilkan semua attempt, termasuk yang gagal. **Hide rollback** menyembunyikan eksekusi yang dibatalkan beserta rollback suksesnya (dipasangkan lewat execution ID, bukan nama migration). Data riwayat tidak dihapus.
 
 ## Dokumentasi lain
 
