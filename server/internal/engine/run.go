@@ -163,9 +163,13 @@ func (e *Engine) execute(ctx context.Context, spec attemptSpec) (_ *models.Migra
 	return &m, res, nil
 }
 
-// applyToMigration memperbarui baris migration sesuai hasil akhir eksekusi up, lalu mengembalikan versi migration untuk dicatat di riwayat
+// applyToMigration memperbarui baris migration sesuai hasil akhir eksekusi up atau forward, lalu mengembalikan versi migration untuk dicatat di riwayat.
+// Forward yang gagal dan rollback tidak mengubah baris migration.
 func (e *Engine) applyToMigration(tx *gorm.DB, m *models.Migration, kind models.JobKind, actor string, res attemptResult, final bool) (*int, error) {
-	if m == nil || kind != models.JobKindUp || (!final && res.status != models.ExecutionSuccess) {
+	skip := kind == models.JobKindRollback ||
+		(kind == models.JobKindForward && res.status != models.ExecutionSuccess) ||
+		(!final && res.status != models.ExecutionSuccess)
+	if m == nil || skip {
 		if m == nil {
 			return nil, nil
 		}
@@ -249,7 +253,7 @@ func specForJob(job *models.MigrationJob) attemptSpec {
 	}
 }
 
-// finishJob mencatat attempt ke riwayat dan memindahkan job ke status berikutnya dalam satu transaksi database platform. 
+// finishJob mencatat attempt ke riwayat dan memindahkan job ke status berikutnya dalam satu transaksi database platform.
 func (e *Engine) finishJob(ctx context.Context, job *models.MigrationJob, m *models.Migration, res attemptResult) (next models.JobStatus, err error) {
 	ctx, span := tracer.Start(ctx, "history.record", trace.WithAttributes(jobAttrs(job)...))
 	defer func() {

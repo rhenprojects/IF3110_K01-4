@@ -199,7 +199,6 @@ func (f *fixture) reloadMigration(id string) models.Migration {
 	return m
 }
 
-
 func TestIntegrationQueuedMigrationRunsAndIsRecorded(t *testing.T) {
 	f := setup(t)
 	eng := f.engine()
@@ -537,6 +536,31 @@ func TestIntegrationRollbackAndForwardUseOriginalSQL(t *testing.T) {
 	}
 	if execs[2].SQL != m.SQL || execs[2].ExecutionID == up.ExecutionID {
 		t.Errorf("forward must be a new execution with the original up SQL: %+v", execs[2])
+	}
+}
+
+func TestIntegrationForwardRetriesFailedMigration(t *testing.T) {
+	f := setup(t)
+	eng := f.engine()
+	t.Cleanup(eng.Start(1))
+
+	m := f.migration(f.connID, "late table", `INSERT INTO `+f.s()+`.late VALUES (1)`, `SELECT 1`)
+	failed := f.waitJob(f.enqueue(eng, f.connID, m.ID, models.JobKindUp, "").ID)
+	if failed.Status != models.JobFailed {
+		t.Fatalf("up = %+v", failed)
+	}
+
+	f.execTarget(`CREATE TABLE ` + f.s() + `.late (id int)`)
+	forward := f.waitJob(f.enqueue(eng, f.connID, m.ID, models.JobKindForward, "").ID)
+	if forward.Status != models.JobSuccess {
+		t.Fatalf("forward = %+v", forward)
+	}
+	if got := f.reloadMigration(m.ID); got.Status != models.MigrationSuccess || got.Version == nil || *got.Version != 1 || got.Error != "" {
+		t.Errorf("migration = %+v", got)
+	}
+	execs := f.executions(m.ID)
+	if len(execs) != 2 || execs[1].Kind != models.JobKindForward || execs[1].MigrationVersion == nil || *execs[1].MigrationVersion != 1 {
+		t.Errorf("executions = %+v", execs)
 	}
 }
 

@@ -146,7 +146,7 @@ func (e *Engine) Enqueue(ctx context.Context, req EnqueueRequest) (job *models.M
 		}
 		rollbackOf = &req.RollbackOf
 	case models.JobKindForward:
-		if m.Status != models.MigrationSuccess {
+		if m.Status != models.MigrationSuccess && m.Status != models.MigrationFailed {
 			return nil, ErrNotExecutable
 		}
 	default:
