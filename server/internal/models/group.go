@@ -8,9 +8,12 @@ type Group struct {
 	ID          string    `json:"id" gorm:"type:uuid;primaryKey;default:gen_random_uuid()"`
 	Name        string    `json:"name" gorm:"column:name;type:varchar(100);uniqueIndex;not null"`
 	Description string    `json:"description" gorm:"column:description;type:varchar(255);not null;default:''"`
+	LeaderID    *string   `json:"leader_id" gorm:"column:leader_id;type:uuid;index"`
 	MemberIDs   []string  `json:"member_ids" gorm:"-"`
 	CreatedAt   time.Time `json:"created_at" gorm:"column:created_at;type:timestamptz;not null;default:CURRENT_TIMESTAMP"`
 	UpdatedAt   time.Time `json:"updated_at" gorm:"column:updated_at;type:timestamptz;not null;default:CURRENT_TIMESTAMP"`
+
+	Leader *User `json:"-" gorm:"foreignKey:LeaderID;constraint:OnDelete:SET NULL"`
 }
 
 func (Group) TableName() string { return "groups" }
@@ -27,13 +30,15 @@ type GroupMember struct {
 func (GroupMember) TableName() string { return "group_members" }
 
 type CreateGroupRequest struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
+	Name        string  `json:"name"`
+	Description string  `json:"description"`
+	LeaderID    *string `json:"leader_id"`
 }
 
 type UpdateGroupRequest struct {
 	Name        *string `json:"name"`
 	Description *string `json:"description"`
+	LeaderID    *string `json:"leader_id"`
 }
 
 type AddGroupMemberRequest struct {

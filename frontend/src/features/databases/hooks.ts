@@ -1,6 +1,8 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../lib/api";
-import type { BatchItem, DatabaseItem, Execution, Migration, MigrationBatch, MigrationInput, RowsResponse, SchemaResponse } from "../../lib/types";
+import type {
+  BatchItem, ChangeRequest, DatabaseItem, JobKind, Execution, Migration, MigrationBatch, MigrationExecution, MigrationInput, MigrationJob, RowsResponse, SchemaResponse,
+} from "../../lib/types";
 
 //[query] semua key diawali "db" supaya ikut dibuang saat logout / 401 (lihat dropCache di auth.tsx).
 //[query] retry dimatikan: 403/404/502 bukan error sementara, user cukup menekan "Coba lagi".
@@ -51,15 +53,86 @@ export const useSaveMigration = (id: string) => {
   });
 };
 
-//[execute] berhasil atau gagal (rollback) sama-sama 200; yang membedakan field status.
-//[execute] seluruh cache database ini di-invalidate karena schema dan isi tabel bisa berubah.
-export const useExecuteMigration = (id: string) => {
+//[review] pengajuan perubahan; setelah semua Team Leader setuju, server memasukkannya ke queue otomatis.
+export const useChangeRequests = (id: string) =>
+  useQuery({
+    queryKey: ["db", id, "change-requests"], retry: false,
+    queryFn: () => api<{ change_requests: ChangeRequest[] }>(`${base(id)}/change-requests`).then((r) => r.change_requests),
+    refetchInterval: (q) => (q.state.data?.some((c) => c.status === "pending_review") ? 3000 : false),
+  });
+
+export const useSubmitChangeRequest = (id: string) => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (mid: string) => api<Migration>(`${base(id)}/migrations/${enc(mid)}/execute`, { method: "POST" }),
-    onSettled: () => qc.invalidateQueries({ queryKey: ["db", id] }),
+    mutationFn: ({ mid, kind }: { mid: string; kind: JobKind }) =>
+      api<ChangeRequest>(`${base(id)}/migrations/${enc(mid)}/change-requests`, { method: "POST", body: JSON.stringify({ kind }) }),
+    onSettled: () => qc.invalidateQueries({ queryKey: ["db", id], predicate: (q) => q.queryKey[2] === "change-requests" || q.queryKey[2] === "migrations" }),
   });
 };
+
+//[review] mengulang masuk queue untuk pengajuan yang sudah disetujui tetapi belum punya job
+export const useDispatchChangeRequest = (id: string) => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (rid: string) => api<ChangeRequest>(`${base(id)}/change-requests/${enc(rid)}/dispatch`, { method: "POST" }),
+    onSettled: () => qc.invalidateQueries({ queryKey: ["db", id], predicate: (q) => q.queryKey[2] !== "rows" && q.queryKey[2] !== "schema" }),
+  });
+};
+
+//[review] inbox Team Leader lintas database: permintaan yang menunggu keputusan user ini
+export const usePendingReviews = () =>
+  useQuery({
+    queryKey: ["db", "pending-reviews"], retry: false,
+    queryFn: () => api<{ change_requests: ChangeRequest[] }>("/change-requests/pending").then((r) => r.change_requests),
+  });
+
+export const useDecideChangeRequest = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ dbId, rid, decision, comment }: { dbId: string; rid: string; decision: "approve" | "reject"; comment: string }) =>
+      api<ChangeRequest>(`${base(dbId)}/change-requests/${enc(rid)}/${decision}`, { method: "POST", body: JSON.stringify({ comment }) }),
+    onSettled: () => qc.invalidateQueries({ queryKey: ["db"] }),
+  });
+};
+
+//[history] seluruh attempt eksekusi database ini; hideRollback menyembunyikan pasangan eksekusi yang dibatalkan dan rollback-nya
+export const useHistory = (id: string, hideRollback: boolean) =>
+  useQuery({
+    queryKey: ["db", id, "history", hideRollback], retry: false,
+    queryFn: () => api<{ executions: MigrationExecution[] }>(`${base(id)}/history${hideRollback ? "?hide_rollback=true" : ""}`).then((r) => r.executions),
+  });
+
+//[queue] polling hanya selama masih ada job yang belum selesai
+const pending = (status?: string) => status === "queued" || status === "running" || status === "uncertain";
+
+export const useJobs = (id: string) =>
+  useQuery({
+    queryKey: ["db", id, "jobs"], retry: false,
+    queryFn: () => api<{ jobs: MigrationJob[] }>(`${base(id)}/jobs`).then((r) => r.jobs),
+    refetchInterval: (q) => (q.state.data?.some((j) => pending(j.status)) ? 1500 : false),
+  });
+
+//[queue] saat job selesai, cache migration/schema/rows di-invalidate karena isinya bisa berubah
+export const useJob = (id: string, jid?: string) => {
+  const qc = useQueryClient();
+  return useQuery({
+    queryKey: ["db", id, "jobs", jid], retry: false, enabled: !!jid,
+    queryFn: async () => {
+      const j = await api<MigrationJob>(`${base(id)}/jobs/${enc(jid!)}`);
+      if (!pending(j.status)) {
+        qc.invalidateQueries({ queryKey: ["db", id], predicate: (q) => q.queryKey[2] !== "jobs" });
+      }
+      return j;
+    },
+    refetchInterval: (q) => (pending(q.state.data?.status) ? 1000 : false),
+  });
+};
+
+export const useMigrationExecutions = (id: string, mid?: string) =>
+  useQuery({
+    queryKey: ["db", id, "migrations", mid, "executions"], retry: false, enabled: !!mid,
+    queryFn: () => api<{ executions: MigrationExecution[] }>(`${base(id)}/migrations/${enc(mid!)}/executions`).then((r) => r.executions),
+  });
 
 //[batch] progress hidup: polling hanya selama batch masih queued/running
 const live = (status?: string) => status === "queued" || status === "running";

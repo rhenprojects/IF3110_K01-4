@@ -49,12 +49,12 @@ function ConnectionForm({ conn, onClose }: { conn?: Connection; onClose: () => v
       <form onSubmit={submit} className="space-y-3">
         <ErrorBox message={generalError(m.error, FIELDS)} />
         <Field label="Nama" error={err("name")}><input className={inputCls} value={f.name} onChange={set("name")} required /></Field>
-        <div className="grid grid-cols-3 gap-3">
-          <div className="col-span-2"><Field label="Host" error={err("host")}><input className={inputCls} value={f.host} onChange={set("host")} required /></Field></div>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <div className="sm:col-span-2"><Field label="Host" error={err("host")}><input className={inputCls} value={f.host} onChange={set("host")} required /></Field></div>
           <Field label="Port" error={err("port")}><input type="number" className={inputCls} value={f.port} onChange={set("port")} /></Field>
         </div>
         <Field label="Nama database" error={err("db_name")}><input className={inputCls} value={f.db_name} onChange={set("db_name")} required /></Field>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <Field label="Username" error={err("username")}><input className={inputCls} value={f.username} onChange={set("username")} required /></Field>
           <Field label="Password" error={err("password")} hint={conn ? "Kosongkan jika tidak diubah" : undefined}>
             <input type="password" className={inputCls} value={f.password} onChange={set("password")} autoComplete="new-password" required={!conn} />
@@ -73,7 +73,7 @@ function ConnectionForm({ conn, onClose }: { conn?: Connection; onClose: () => v
           {test.data && <p className="rounded bg-green-50 px-3 py-2 text-green-700">Terhubung: {test.data.server_version}</p>}
           {test.error && <p className="rounded bg-red-50 px-3 py-2 text-red-700">Gagal: {(test.error as Error).message}</p>}
         </div>
-        <div className="flex justify-between pt-2">
+        <div className="flex flex-wrap justify-between gap-2 pt-2">
           <Button onClick={() => test.mutate({ id: conn?.id, input: input() })} disabled={test.isPending}>
             {test.isPending ? "Menguji…" : "Test koneksi"}
           </Button>

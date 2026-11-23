@@ -66,7 +66,7 @@ export default function BatchDetail() {
     <div className="space-y-5">
       <Link to={`/databases/${db.id}/migrations/batches`} className="text-sm text-slate-500 hover:underline">← Riwayat batch</Link>
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="flex items-center gap-3 text-lg font-semibold">
+        <h2 className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 break-words text-lg font-semibold">
           <span className="font-mono text-slate-400">{b.id.slice(0, 8)}</span> Batch <BatchStatusBadge status={b.status} />
         </h2>
         {editable && !terminal && (

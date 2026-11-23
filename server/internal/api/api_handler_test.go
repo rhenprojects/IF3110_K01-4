@@ -11,7 +11,7 @@ import (
 
 func TestBenchRaw(t *testing.T) {
 	app := fiber.New()
-	api.SetupRoutes(app, nil, nil, false, nil)
+	api.SetupRoutes(app, nil, nil, false, nil, nil)
 
 	res, err := app.Test(httptest.NewRequest("GET", "/api/v1/bench-raw", nil))
 	if err != nil {

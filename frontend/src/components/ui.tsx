@@ -47,7 +47,7 @@ export function Modal({ title, onClose, children }: { title: string; onClose: ()
   return (
     <div className="fixed inset-0 z-10 grid place-items-center bg-black/40 p-4" onMouseDown={onClose}>
       <div ref={box} tabIndex={-1} role="dialog" aria-modal="true" aria-label={title} onMouseDown={(e) => e.stopPropagation()}
-        className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-lg bg-white p-5 shadow-xl focus:outline-none">
+        className="max-h-[90dvh] w-full max-w-lg overflow-y-auto rounded-lg bg-white p-5 shadow-xl focus:outline-none">
         <h2 className="mb-4 text-lg font-semibold">{title}</h2>
         {children}
       </div>
@@ -61,7 +61,7 @@ export function ConfirmDialog({ title, message, confirmLabel = "Hapus", busy, on
   return (
     <Modal title={title} onClose={onClose}>
       <p className="text-sm text-slate-600">{message}</p>
-      <div className="flex justify-end gap-2 pt-5">
+      <div className="flex flex-wrap justify-end gap-2 pt-5">
         <Button onClick={onClose}>Batal</Button>
         <Button variant="danger" onClick={onConfirm} disabled={busy}>{confirmLabel}</Button>
       </div>
@@ -87,7 +87,7 @@ export function Button({ variant = "ghost", className = "", ...p }: BtnProps) {
     ghost: "border border-slate-300 hover:bg-slate-100",
     danger: "border border-red-300 text-red-700 hover:bg-red-50",
   }[variant];
-  return <button type="button" {...p} className={`rounded px-3 py-1.5 text-sm disabled:opacity-50 ${v} ${className}`} />;
+  return <button type="button" {...p} className={`rounded px-3 py-2 text-sm disabled:opacity-50 sm:py-1.5 ${v} ${className}`} />;
 }
 
 export function ErrorBox({ message }: { message?: string }) {
@@ -96,7 +96,7 @@ export function ErrorBox({ message }: { message?: string }) {
 
 export function PageHeader({ title, action }: { title: string; action?: ReactNode }) {
   return (
-    <div className="mb-4 flex items-center justify-between">
+    <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
       <h2 className="text-lg font-semibold">{title}</h2>
       {action}
     </div>
@@ -133,7 +133,7 @@ export const td = "px-3 py-2 text-sm";
 export function Table({ columns, children }: { columns: string[]; children: ReactNode }) {
   return (
     <div className="overflow-x-auto rounded border bg-white">
-      <table className="w-full">
+      <table className="w-full min-w-[40rem]">
         <thead className="bg-slate-50">
           <tr>{columns.map((c, i) => <th key={i} className={th}>{c}</th>)}</tr>
         </thead>

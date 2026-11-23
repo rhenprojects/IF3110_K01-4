@@ -7,7 +7,7 @@ import { isDestructive } from "../../lib/format";
 import type { DatabaseItem, MigrationInput } from "../../lib/types";
 import { StateError, canEdit, useDb } from "./shared";
 
-const FIELDS = ["name", "sql"];
+const FIELDS = ["name", "sql", "sql_down", "irreversible_reason"];
 
 function EditorForm({ db, mid, initial }: { db: DatabaseItem; mid?: string; initial: MigrationInput }) {
   const nav = useNavigate();
@@ -15,11 +15,17 @@ function EditorForm({ db, mid, initial }: { db: DatabaseItem; mid?: string; init
   const save = useSaveMigration(db.id);
   const [name, setName] = useState(initial.name);
   const [sql, setSql] = useState(initial.sql);
+  const [sqlDown, setSqlDown] = useState(initial.sql_down ?? "");
+  const [irreversible, setIrreversible] = useState(initial.irreversible ?? false);
+  const [reason, setReason] = useState(initial.irreversible_reason ?? "");
 
   async function submit(e: FormEvent) {
     e.preventDefault();
     try {
-      const m = await save.mutateAsync({ mid, input: { name, sql } });
+      const input: MigrationInput = irreversible
+        ? { name, sql, sql_down: "", irreversible: true, irreversible_reason: reason }
+        : { name, sql, sql_down: sqlDown, irreversible: false, irreversible_reason: "" };
+      const m = await save.mutateAsync({ mid, input });
       toast.success("Draft migration disimpan");
       nav(`/databases/${db.id}/migrations/${m.id}`);
     } catch {
@@ -35,7 +41,7 @@ function EditorForm({ db, mid, initial }: { db: DatabaseItem; mid?: string; init
       </Field>
       <Field label="SQL" error={fieldError(save.error, "sql")}
         hint={`${sql.split("\n").length} baris · ${sql.length} karakter`}>
-        <textarea className={`${inputCls} h-72 font-mono`} value={sql} spellCheck={false}
+        <textarea wrap="off" className={`${inputCls} h-72 resize-y overflow-auto whitespace-pre font-mono`} value={sql} spellCheck={false}
           placeholder="ALTER TABLE customers ADD COLUMN phone text;" onChange={(e) => setSql(e.target.value)} required />
       </Field>
       {isDestructive(sql) && (
@@ -43,11 +49,28 @@ function EditorForm({ db, mid, initial }: { db: DatabaseItem; mid?: string; init
           SQL ini berisi perintah destruktif (DROP / TRUNCATE / DELETE). Periksa lagi sebelum dijalankan.
         </p>
       )}
+      <label className="flex items-start gap-2 text-sm">
+        <input type="checkbox" className="mt-1" checked={irreversible} onChange={(e) => setIrreversible(e.target.checked)} />
+        <span>Migration ini <b>tidak bisa dibatalkan</b> (irreversible), misalnya karena menghapus data permanen.</span>
+      </label>
+      {irreversible ? (
+        <Field label="Alasan irreversible" error={fieldError(save.error, "irreversible_reason")}
+          hint="Wajib sebelum migration bisa dijalankan. Migration irreversible tidak bisa di-rollback.">
+          <textarea className={`${inputCls} h-20`} value={reason} onChange={(e) => setReason(e.target.value)} />
+        </Field>
+      ) : (
+        <Field label="SQL down (rollback)" error={fieldError(save.error, "sql_down")}
+          hint="Membatalkan SQL di atas. Wajib sebelum migration bisa dijalankan.">
+          <textarea wrap="off" className={`${inputCls} h-40 resize-y overflow-auto whitespace-pre font-mono`} value={sqlDown} spellCheck={false}
+            placeholder="ALTER TABLE customers DROP COLUMN phone;" onChange={(e) => setSqlDown(e.target.value)} />
+        </Field>
+      )}
       <p className="text-xs text-slate-500">
-        Disimpan sebagai draft dulu. Saat dijalankan, seluruh SQL berada dalam satu transaction (COMMIT jika sukses, ROLLBACK jika gagal).
-        Perintah yang tidak boleh berada di dalam transaction, seperti CREATE INDEX CONCURRENTLY, akan gagal.
+        Disimpan sebagai draft dulu. Saat dijalankan, migration masuk queue lalu dikerjakan worker; satu database hanya menjalankan
+        satu migration pada satu waktu. Seluruh SQL berada dalam satu transaction (COMMIT jika sukses, ROLLBACK jika gagal), jadi
+        perintah seperti CREATE INDEX CONCURRENTLY akan gagal. SQL up dan down tidak bisa diubah lagi setelah masuk queue.
       </p>
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-2">
         <Button type="submit" variant="primary" disabled={save.isPending}>Simpan draft</Button>
         <Button onClick={() => nav(-1)}>Batal</Button>
       </div>
@@ -75,8 +98,8 @@ export default function MigrationEditor() {
       {mid && q.data && q.data.status !== "draft" && (
         <p role="alert" className="text-sm text-slate-600">Hanya migration berstatus draft yang bisa diedit. {back}</p>
       )}
-      {mid && q.data?.status === "draft" && <EditorForm db={db} mid={mid} initial={{ name: q.data.name, sql: q.data.sql }} />}
-      {!mid && <EditorForm db={db} initial={{ name: prefill.name ?? "", sql: prefill.sql ?? "" }} />}
+      {mid && q.data?.status === "draft" && <EditorForm db={db} mid={mid} initial={q.data} />}
+      {!mid && <EditorForm db={db} initial={{ name: "", sql: "", ...prefill }} />}
     </div>
   );
 }

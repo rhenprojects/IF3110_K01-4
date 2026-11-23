@@ -1,4 +1,4 @@
-import type { AccessEntry, BatchItem, Connection, Group, Migration, MigrationBatch, User } from "../lib/types";
+import type { AccessEntry, BatchItem, ChangeRequest, Connection, Group, Migration, MigrationBatch, MigrationExecution, MigrationJob, User } from "../lib/types";
 import { seedTargets, type Target } from "./target";
 
 export type StoredUser = User & { password: string };
@@ -11,6 +11,9 @@ export type Store = {
   migrations: Record<string, Migration[]>;
   batches: MigrationBatch[];
   batchItems: Record<string, BatchItem[]>; //[batch] key = batch id
+  jobs: MigrationJob[]; //[queue] terbaru di depan
+  executions: MigrationExecution[];
+  changeRequests: ChangeRequest[]; //[review] terbaru di depan
 };
 
 const KEY = "mock_db";
@@ -24,8 +27,8 @@ const seed = (): Store => ({
     { id: "u3", username: "sinta", name: "Sinta", is_admin: false, password: "password", created_at: T, updated_at: T },
   ],
   groups: [
-    { id: "g1", name: "Tim Backend", description: "Developer backend", member_ids: ["u2"], created_at: T, updated_at: T },
-    { id: "g2", name: "Tim QA", description: "", member_ids: ["u3"], created_at: T, updated_at: T },
+    { id: "g1", name: "Tim Backend", description: "Developer backend", member_ids: ["u2"], leader_id: "u2", created_at: T, updated_at: T },
+    { id: "g2", name: "Tim QA", description: "", member_ids: ["u3"], leader_id: "u3", created_at: T, updated_at: T },
   ],
   connections: [
     { id: "c1", name: "toko", host: "localhost", port: 5432, db_name: "toko", username: "postgres", ssl_mode: "prefer", created_by: "u1", created_at: T, updated_at: T },
@@ -41,19 +44,24 @@ const seed = (): Store => ({
   migrations: seedMigrations(),
   batches: [],
   batchItems: {},
+  jobs: [],
+  executions: [],
+  changeRequests: [],
 });
 
 //[mock] riwayat awal agar halaman migration tidak kosong saat demo (urut terbaru dibuat dulu)
 function seedMigrations(): Record<string, Migration[]> {
   const m = (id: string, conn: string, o: Partial<Migration> & Pick<Migration, "name" | "sql" | "status">): Migration => ({
     id, connection_id: conn, version: null, error: "", created_by: "u2", created_by_name: "Budi", executed_by: null,
-    executed_by_name: null, created_at: T, updated_at: T, executed_at: null, duration_ms: null, ...o,
+    executed_by_name: null, created_at: T, updated_at: T, executed_at: null, duration_ms: null,
+    sql_down: "", irreversible: false, irreversible_reason: "", revision: 1, ...o,
   });
   const ran = { executed_by: "u2", executed_by_name: "Budi" };
   return {
     c1: [
       m("m4", "c1", { name: "tambah tabel produk", status: "draft", created_at: "2026-10-24T08:00:00Z",
-        sql: "CREATE TABLE products (\n  id serial PRIMARY KEY,\n  name text NOT NULL,\n  price numeric(12,2) NOT NULL\n);" }),
+        sql: "CREATE TABLE products (\n  id serial PRIMARY KEY,\n  name text NOT NULL,\n  price numeric(12,2) NOT NULL\n);",
+        sql_down: "DROP TABLE products;" }),
       m("m3", "c1", { name: "hapus tabel lama", status: "failed", created_at: "2026-10-23T09:00:00Z", ...ran,
         executed_at: "2026-10-23T09:05:00Z", duration_ms: 7, sql: "DROP TABLE tabel_lama;",
         error: 'table "tabel_lama" does not exist' }),

@@ -9,20 +9,24 @@ import { useToast } from "../../components/toast";
 import { errorMessage } from "../../lib/errors";
 import type { AccessEntry, AccessLevel, Group } from "../../lib/types";
 
-const FIELDS = ["name", "description"];
+const FIELDS = ["name", "description", "leader_id"];
 
 function GroupForm({ group, onClose }: { group?: Group; onClose: () => void }) {
   const toast = useToast();
   const create = useCreateGroup();
   const update = useUpdateGroup();
+  const users = useUsers();
   const m = group ? update : create;
   const [name, setName] = useState(group?.name ?? "");
   const [description, setDescription] = useState(group?.description ?? "");
+  const [leader, setLeader] = useState(group?.leader_id ?? "");
+  //[review] leader dipilih dari anggota group (plus leader saat ini), jadi hanya tersedia saat edit
+  const candidates = users.data?.filter((u) => group?.member_ids.includes(u.id) || u.id === group?.leader_id) ?? [];
 
   async function submit(e: FormEvent) {
     e.preventDefault();
     try {
-      if (group) await update.mutateAsync({ id: group.id, name, description });
+      if (group) await update.mutateAsync({ id: group.id, name, description, ...(leader && { leader_id: leader }) });
       else await create.mutateAsync({ name, description });
       toast.success(group ? `Group "${name}" diperbarui` : `Group "${name}" dibuat`);
       onClose();
@@ -41,6 +45,15 @@ function GroupForm({ group, onClose }: { group?: Group; onClose: () => void }) {
         <Field label="Deskripsi" error={fieldError(m.error, "description")} hint="Maksimal 255 karakter">
           <input className={inputCls} value={description} onChange={(e) => setDescription(e.target.value)} />
         </Field>
+        {group && (
+          <Field label="Team Leader" error={fieldError(m.error, "leader_id")}
+            hint={candidates.length === 0 ? "Tambahkan anggota dulu lewat Anggota & akses." : "Wajib ada agar migration database group ini bisa diajukan."}>
+            <select className={inputCls} value={leader} onChange={(e) => setLeader(e.target.value)}>
+              {!leader && <option value="">Belum ada leader</option>}
+              {candidates.map((u) => <option key={u.id} value={u.id}>{u.name} ({u.username})</option>)}
+            </select>
+          </Field>
+        )}
         <div className="flex justify-end gap-2 pt-2">
           <Button onClick={onClose}>Batal</Button>
           <Button type="submit" variant="primary" disabled={m.isPending}>Simpan</Button>

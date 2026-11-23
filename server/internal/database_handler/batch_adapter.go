@@ -3,8 +3,6 @@ package databasehandler
 import (
 	"context"
 	"errors"
-	"fmt"
-	"time"
 
 	"web_backend/internal/batch"
 	"web_backend/internal/models"
@@ -13,9 +11,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// batchExecutor adapts the existing single-migration engine to the batch
-// Coordinator. TODO(orang-1): replace with the shared ExecuteOne entry point
-// once the engine exposes it; delete this file after the merge.
+// batchExecutor menghubungkan batch Coordinator ke execution engine bersama
 type batchExecutor struct {
 	h *Handler
 }
@@ -25,11 +21,14 @@ func (h *Handler) NewBatchCoordinator() *batch.Coordinator {
 }
 
 func (e *batchExecutor) Acquire(ctx context.Context, connectionID string) (func(), error) {
-	lock := e.h.lockFor(connectionID)
-	if !lock.TryLock() {
+	release, ok, err := e.h.engine.Locker().TryLock(ctx, connectionID)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
 		return nil, batch.ErrBusy
 	}
-	return lock.Unlock, nil
+	return release, nil
 }
 
 func (e *batchExecutor) ExecuteLocked(ctx context.Context, connectionID, migrationID, executedBy string, executionID uuid.UUID) (batch.Outcome, error) {
@@ -47,60 +46,27 @@ func (e *batchExecutor) ExecuteLocked(ctx context.Context, connectionID, migrati
 	if migration.Status != models.MigrationDraft {
 		return batch.Outcome{}, batch.ErrMigrationGone
 	}
-	pool, err := e.h.svc.Pool(ctx, connectionID)
+	attempt, err := e.nextAttempt(ctx, executionID.String())
 	if err != nil {
 		return batch.Outcome{}, err
 	}
-
-	started := time.Now()
-	tx, err := pool.Begin(ctx)
+	outcome, err := e.h.engine.RunLocked(ctx, connectionID, migrationID, executedBy, executionID.String(), attempt)
 	if err != nil {
 		return batch.Outcome{}, err
 	}
-	_, execErr := tx.Exec(ctx, migration.SQL)
-	duration := time.Since(started).Milliseconds()
-	if duration < 1 {
-		duration = 1
+	status := models.MigrationSuccess
+	if outcome.Status == models.ExecutionFailed {
+		status = models.MigrationFailed
 	}
-	now := time.Now().UTC()
-	migration.ExecutedBy = &executedBy
-	migration.ExecutedAt = &now
-	migration.DurationMs = &duration
-
-	if execErr != nil {
-		_ = tx.Rollback(ctx)
-		migration.Status = models.MigrationFailed
-		migration.Error = execErr.Error()
-		if err := e.h.db.WithContext(ctx).Save(&migration).Error; err != nil {
-			return batch.Outcome{}, err
-		}
-		return batch.Outcome{Status: models.MigrationFailed, DurationMs: duration, Error: execErr.Error()}, nil
-	}
-
-	version, err := e.h.nextVersion(ctx, connectionID)
-	if err != nil {
-		_ = tx.Rollback(ctx)
-		return batch.Outcome{}, err
-	}
-	versionPtr := toIntPtr(version)
-	migration.Version = versionPtr
-	migration.Status = models.MigrationSuccess
-	migration.Error = ""
-	if err := e.h.db.WithContext(ctx).Save(&migration).Error; err != nil {
-		_ = tx.Rollback(ctx)
-		return batch.Outcome{}, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		migration.Status = models.MigrationFailed
-		migration.Error = fmt.Sprintf("commit failed: %v", err)
-		if saveErr := e.h.db.WithContext(context.Background()).Save(&migration).Error; saveErr != nil {
-			return batch.Outcome{}, saveErr
-		}
-		return batch.Outcome{}, fmt.Errorf("commit failed: %w", err)
-	}
-	return batch.Outcome{Status: models.MigrationSuccess, DurationMs: duration}, nil
+	return batch.Outcome{Status: status, DurationMs: outcome.DurationMs, Error: outcome.Error}, nil
 }
 
-func toIntPtr(v int) *int {
-	return &v
+// nextAttempt menjaga nomor attempt unik per execution ID di riwayat
+func (e *batchExecutor) nextAttempt(ctx context.Context, executionID string) (int, error) {
+	var count int64
+	err := e.h.db.WithContext(ctx).Model(&models.MigrationExecution{}).
+		Where("execution_id = ?", executionID).Count(&count).Error
+	return int(count) + 1, err
 }
+
+var _ batch.Executor = (*batchExecutor)(nil)

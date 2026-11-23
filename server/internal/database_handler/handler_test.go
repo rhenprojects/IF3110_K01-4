@@ -162,7 +162,7 @@ func TestParseMigrationInput(t *testing.T) {
 		app := fiber.New()
 		var gotErr error
 		app.Post("/", func(c *fiber.Ctx) error {
-			_, _, gotErr = parseMigrationInput(c)
+			_, gotErr = parseMigrationInput(c)
 			return nil
 		})
 		req := httptest.NewRequest("POST", "/", strings.NewReader(tc.body))
@@ -197,22 +197,32 @@ func TestRoutesRequireLoginAndDatabase(t *testing.T) {
 	}
 }
 
-func TestLockForIsPerConnection(t *testing.T) {
-	h := &Handler{}
-	a1, a2, b := h.lockFor("a"), h.lockFor("a"), h.lockFor("b")
-	if a1 != a2 {
-		t.Error("same connection should share one lock")
+func TestParseMigrationInputKeepsDownAndIrreversible(t *testing.T) {
+	cases := []struct {
+		body       string
+		wantDown   string
+		wantIrr    bool
+		wantReason string
+	}{
+		{`{"name":"a","sql":"CREATE TABLE t (id int)","sql_down":"DROP TABLE t"}`, "DROP TABLE t", false, ""},
+		{`{"name":"a","sql":"DELETE FROM t","irreversible":true,"irreversible_reason":"  data deleted  "}`, "", true, "data deleted"},
+		{`{"name":"a","sql":"SELECT 1","sql_down":"SELECT 1","irreversible_reason":"x"}`, "SELECT 1", false, ""},
 	}
-	if a1 == b {
-		t.Error("different connections should not share a lock")
+	for _, tc := range cases {
+		app := fiber.New()
+		var got migrationInput
+		var gotErr error
+		app.Post("/", func(c *fiber.Ctx) error {
+			got, gotErr = parseMigrationInput(c)
+			return nil
+		})
+		req := httptest.NewRequest("POST", "/", strings.NewReader(tc.body))
+		req.Header.Set("Content-Type", "application/json")
+		if _, err := app.Test(req); err != nil {
+			t.Fatal(err)
+		}
+		if gotErr != nil || got.SQLDown != tc.wantDown || got.Irreversible != tc.wantIrr || got.IrreversibleReason != tc.wantReason {
+			t.Errorf("%s: got %+v err %v", tc.body, got, gotErr)
+		}
 	}
-	a1.Lock()
-	if a2.TryLock() {
-		t.Error("second migration on the same connection should be blocked")
-	}
-	if !b.TryLock() {
-		t.Error("migration on another connection should not be blocked")
-	}
-	a1.Unlock()
-	b.Unlock()
 }

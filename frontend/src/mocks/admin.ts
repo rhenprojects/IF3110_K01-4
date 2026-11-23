@@ -106,7 +106,7 @@ export const adminHandlers = [
     if (!name || name.length > 100) return err(400, "required, max 100 characters", "name");
     if ((body.description ?? "").length > 255) return err(400, "max 255 characters", "description");
     if (s.groups.some((g) => g.name === name)) return err(409, "group name already exists");
-    const g: Group = { id: uid(), name, description: body.description ?? "", member_ids: [], created_at: now(), updated_at: now() };
+    const g: Group = { id: uid(), name, description: body.description ?? "", member_ids: [], leader_id: null, created_at: now(), updated_at: now() };
     s.groups.push(g);
     return HttpResponse.json(g, { status: 201 });
   })),
@@ -117,8 +117,10 @@ export const adminHandlers = [
     if (!name || name.length > 100) return err(400, "required, max 100 characters", "name");
     if ((body.description ?? "").length > 255) return err(400, "max 255 characters", "description");
     if (s.groups.some((x) => x.id !== id && x.name === name)) return err(409, "group name already exists");
+    if (body.leader_id && !s.users.some((u) => u.id === body.leader_id)) return err(400, "unknown user id", "leader_id");
     g.name = name;
     g.description = body.description ?? g.description;
+    if (body.leader_id) g.leader_id = body.leader_id;
     g.updated_at = now();
     return HttpResponse.json(g);
   })),

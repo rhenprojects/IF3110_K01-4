@@ -116,7 +116,7 @@ test_auth() {
 test_db() {
   ensure_db
   echo "Running target database tests..."
-  (cd "$SERVER_DIR" && TEST_PG_DSN="$PG_DSN" go test -p 1 ./internal/targetdb ./internal/database_handler -count=1)
+  (cd "$SERVER_DIR" && TEST_PG_DSN="$PG_DSN" go test -p 1 ./internal/targetdb ./internal/engine ./internal/database_handler -count=1)
 }
 
 ensure_frontend_deps() {
@@ -279,6 +279,28 @@ section() {
   printf "\n%b[%s]%b\n" "$YELLOW" "$1" "$NC"
 }
 
+wait_job() {
+  i=0
+  while :; do
+    request GET "/databases/$1/jobs/$2" "" "$3"
+    [ "$STATUS" = "200" ] || fail "poll job $2" "HTTP 200, got $STATUS"
+    case "$BODY" in
+      *'"status":"success"'* | *'"status":"failed"'*) return 0 ;;
+    esac
+    i=$((i + 1))
+    [ "$i" -le 100 ] || fail "job $2 did not finish" "status success or failed"
+    sleep 0.1
+  done
+}
+
+approve_up() {
+  request POST "/databases/$1/migrations/$2/change-requests" '{"kind":"up"}' "$3" "$4"
+  assert_status 201 "submit change request"
+  request POST "/databases/$1/change-requests/$(json_string "$BODY" id)/approve" "" "$3" "$4"
+  assert_status 200 "leader approves change request"
+  JOB_ID=$(json_string "$BODY" job_id)
+}
+
 run_contract_tests() {
   ADMIN_JAR="$TMP_DIR/admin.jar"
   USER_JAR="$TMP_DIR/user.jar"
@@ -421,7 +443,11 @@ run_contract_tests() {
   assert_contains "$BODY" '"level":"edit"' "effective level is edit"
 
   section "Migrations"
+  request PUT "/admin/groups/$GROUP_ID" "{\"leader_id\":\"$USER_ID\"}" "$ADMIN_JAR" "$ADMIN_CSRF"
+  assert_status 200 "set group leader"
+
   CREATE_SQL="CREATE TABLE $SMOKE_TABLE (id serial PRIMARY KEY, note text); CREATE INDEX ${SMOKE_TABLE}_note_idx ON $SMOKE_TABLE (note);"
+  DROP_SQL="DROP TABLE $SMOKE_TABLE;"
   CREATE_MIGRATION="{\"name\":\"create $SMOKE_TABLE\",\"sql\":\"$CREATE_SQL\"}"
   request POST "/databases/$CONN_ID/migrations" "$CREATE_MIGRATION" "$USER_JAR" "$USER_CSRF"
   assert_status 201 "create migration draft"
@@ -429,17 +455,40 @@ run_contract_tests() {
   assert_contains "$BODY" "\"created_by_name\":\"API User\"" "created_by_name included"
   MIG_ID=$(json_string "$BODY" id)
 
-  request PUT "/databases/$CONN_ID/migrations/$MIG_ID" "{\"name\":\"create $SMOKE_TABLE\",\"sql\":\"$CREATE_SQL\"}" "$USER_JAR" "$USER_CSRF"
-  assert_status 200 "update migration draft"
+  request POST "/databases/$CONN_ID/migrations/$MIG_ID/change-requests" '{"kind":"up"}' "$USER_JAR" "$USER_CSRF"
+  assert_status 400 "submit without sql_down or irreversible rejected"
+  assert_contains "$BODY" '"field":"sql_down"' "validation names sql_down"
 
-  request POST "/databases/$CONN_ID/migrations/$MIG_ID/execute" "" "$USER_JAR" "$USER_CSRF"
-  assert_status 200 "execute migration"
+  request PUT "/databases/$CONN_ID/migrations/$MIG_ID" "{\"name\":\"create $SMOKE_TABLE\",\"sql\":\"$CREATE_SQL\",\"sql_down\":\"$DROP_SQL\"}" "$USER_JAR" "$USER_CSRF"
+  assert_status 200 "update migration draft with down SQL"
+  assert_contains "$BODY" '"revision":2' "update bumps revision"
+
+  approve_up "$CONN_ID" "$MIG_ID" "$USER_JAR" "$USER_CSRF"
+  assert_contains "$BODY" '"kind":"up"' "change request kind is up"
+
+  request PUT "/databases/$CONN_ID/migrations/$MIG_ID" "{\"name\":\"changed\",\"sql\":\"SELECT 1;\",\"sql_down\":\"SELECT 1;\"}" "$USER_JAR" "$USER_CSRF"
+  assert_status 409 "queued migration is immutable"
+
+  wait_job "$CONN_ID" "$JOB_ID" "$USER_JAR"
+  assert_contains "$BODY" '"status":"success"' "job succeeded"
+
+  request GET "/databases/$CONN_ID/migrations/$MIG_ID" "" "$USER_JAR"
+  assert_status 200 "get executed migration"
   assert_contains "$BODY" '"status":"success"' "migration succeeded"
   assert_contains "$BODY" '"version":1' "first version is 1"
   assert_contains "$BODY" "\"executed_by_name\":\"API User\"" "executed_by_name included"
 
-  request POST "/databases/$CONN_ID/migrations/$MIG_ID/execute" "" "$USER_JAR" "$USER_CSRF"
-  assert_status 409 "executed migration cannot run again"
+  request GET "/databases/$CONN_ID/migrations/$MIG_ID/executions" "" "$USER_JAR"
+  assert_status 200 "list migration executions"
+  assert_contains "$BODY" '"attempt":1' "execution attempt recorded"
+  assert_contains "$BODY" "$SMOKE_TABLE" "execution keeps SQL copy"
+
+  request GET "/databases/$CONN_ID/jobs" "" "$USER_JAR"
+  assert_status 200 "list queue jobs"
+  assert_contains "$BODY" "\"id\":\"$JOB_ID\"" "queue lists the job"
+
+  request POST "/databases/$CONN_ID/migrations/$MIG_ID/change-requests" '{"kind":"up"}' "$USER_JAR" "$USER_CSRF"
+  assert_status 409 "executed migration cannot be submitted again"
 
   request GET "/databases/$CONN_ID/schema" "" "$USER_JAR"
   assert_status 200 "schema after migration"
@@ -454,13 +503,16 @@ run_contract_tests() {
   assert_status 404 "unknown table rejected"
 
   INSERT_SQL="INSERT INTO $SMOKE_TABLE (note) VALUES ('halo');"
-  INSERT_MIGRATION="{\"name\":\"insert smoke row\",\"sql\":\"$INSERT_SQL\"}"
+  INSERT_MIGRATION="{\"name\":\"insert smoke row\",\"sql\":\"$INSERT_SQL\",\"sql_down\":\"DELETE FROM $SMOKE_TABLE WHERE note = 'halo';\"}"
   request POST "/databases/$CONN_ID/migrations" "$INSERT_MIGRATION" "$USER_JAR" "$USER_CSRF"
   assert_status 201 "create insert migration"
   INSERT_ID=$(json_string "$BODY" id)
 
-  request POST "/databases/$CONN_ID/migrations/$INSERT_ID/execute" "" "$USER_JAR" "$USER_CSRF"
-  assert_status 200 "execute insert migration"
+  approve_up "$CONN_ID" "$INSERT_ID" "$USER_JAR" "$USER_CSRF"
+  wait_job "$CONN_ID" "$JOB_ID" "$USER_JAR"
+  assert_contains "$BODY" '"status":"success"' "insert job succeeded"
+
+  request GET "/databases/$CONN_ID/migrations/$INSERT_ID" "" "$USER_JAR"
   assert_contains "$BODY" '"version":2' "second successful version is 2"
 
   request GET "/databases/$CONN_ID/tables/public/$SMOKE_TABLE/rows?limit=50&offset=0" "" "$USER_JAR"
@@ -468,18 +520,22 @@ run_contract_tests() {
   assert_contains "$BODY" '"total":1' "row count is 1"
   assert_contains "$BODY" '"halo"' "inserted value returned"
 
-  FAIL_MIGRATION='{"name":"broken migration","sql":"THIS IS NOT SQL;"}'
+  FAIL_MIGRATION='{"name":"broken migration","sql":"THIS IS NOT SQL;","irreversible":true,"irreversible_reason":"smoke test"}'
   request POST "/databases/$CONN_ID/migrations" "$FAIL_MIGRATION" "$USER_JAR" "$USER_CSRF"
   assert_status 201 "create failing migration"
   FAIL_ID=$(json_string "$BODY" id)
 
-  request POST "/databases/$CONN_ID/migrations/$FAIL_ID/execute" "" "$USER_JAR" "$USER_CSRF"
-  assert_status 200 "failing SQL still returns 200"
+  approve_up "$CONN_ID" "$FAIL_ID" "$USER_JAR" "$USER_CSRF"
+  wait_job "$CONN_ID" "$JOB_ID" "$USER_JAR"
+  assert_contains "$BODY" '"status":"failed"' "job marked failed"
+  assert_contains "$BODY" '"attempts":1' "syntax error is not retried"
+
+  request GET "/databases/$CONN_ID/migrations/$FAIL_ID" "" "$USER_JAR"
   assert_contains "$BODY" '"status":"failed"' "migration marked failed"
   assert_contains "$BODY" '"version":null' "failed migration has no version"
 
-  request POST "/databases/$CONN_ID/migrations/$FAIL_ID/execute" "" "$USER_JAR" "$USER_CSRF"
-  assert_status 409 "failed migration cannot rerun"
+  request POST "/databases/$CONN_ID/migrations/$FAIL_ID/change-requests" '{"kind":"up"}' "$USER_JAR" "$USER_CSRF"
+  assert_status 409 "failed migration cannot be submitted again"
 
   request GET "/databases/$CONN_ID/migrations" "" "$USER_JAR"
   assert_status 200 "list migration history"

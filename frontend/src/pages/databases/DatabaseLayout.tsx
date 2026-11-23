@@ -4,7 +4,7 @@ import { Loading } from "../../components/ui";
 import { LevelBadge, StateError } from "./shared";
 
 const tab = ({ isActive }: { isActive: boolean }) =>
-  `border-b-2 px-4 py-2 text-sm ${isActive ? "border-slate-900 font-medium" : "border-transparent text-slate-500 hover:text-slate-900"}`;
+  `shrink-0 whitespace-nowrap border-b-2 px-4 py-2 text-sm ${isActive ? "border-slate-900 font-medium" : "border-transparent text-slate-500 hover:text-slate-900"}`;
 
 //[layout] memuat info database + level efektif; 403/404/502 ditangani di sini sekali untuk semua sub-halaman
 export default function DatabaseLayout() {
@@ -17,13 +17,15 @@ export default function DatabaseLayout() {
     <div>
       <p className="mb-1 text-sm text-slate-500"><Link to="/databases" className="hover:underline">Databases</Link> /</p>
       <div className="mb-4 flex flex-wrap items-center gap-3">
-        <h1 className="text-xl font-semibold">{db.name}</h1>
+        <h1 className="min-w-0 break-words text-xl font-semibold">{db.name}</h1>
         <span className="text-sm text-slate-500">{db.db_name}</span>
         <LevelBadge level={db.level} />
       </div>
-      <nav className="mb-6 flex border-b">
+      <nav className="mb-6 flex overflow-x-auto border-b">
         <NavLink to="." end className={tab}>Schema & Data</NavLink>
         <NavLink to="migrations" end className={tab}>Migrations</NavLink>
+        <NavLink to="history" className={tab}>Riwayat eksekusi</NavLink>
+        <NavLink to="queue" className={tab}>Queue</NavLink>
         <NavLink to="migrations/batches" className={tab}>Batch</NavLink>
       </nav>
       <Outlet context={db} />
