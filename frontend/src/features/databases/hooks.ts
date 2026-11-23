@@ -1,7 +1,7 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../lib/api";
 import type {
-  BatchItem, DatabaseItem, Execution, Migration, MigrationBatch, MigrationExecution, MigrationInput, MigrationJob, RowsResponse, SchemaResponse,
+  BatchItem, ChangeRequest, DatabaseItem, JobKind, Execution, Migration, MigrationBatch, MigrationExecution, MigrationInput, MigrationJob, RowsResponse, SchemaResponse,
 } from "../../lib/types";
 
 //[query] semua key diawali "db" supaya ikut dibuang saat logout / 401 (lihat dropCache di auth.tsx).
@@ -53,12 +53,29 @@ export const useSaveMigration = (id: string) => {
   });
 };
 
-//[execute] 202 = job masuk queue; hasilnya dipantau lewat useJob sampai success/failed.
-export const useExecuteMigration = (id: string) => {
+//[review] pengajuan perubahan; setelah semua Team Leader setuju, server memasukkannya ke queue otomatis.
+export const useChangeRequests = (id: string) =>
+  useQuery({
+    queryKey: ["db", id, "change-requests"], retry: false,
+    queryFn: () => api<{ change_requests: ChangeRequest[] }>(`${base(id)}/change-requests`).then((r) => r.change_requests),
+    refetchInterval: (q) => (q.state.data?.some((c) => c.status === "pending_review") ? 3000 : false),
+  });
+
+export const useSubmitChangeRequest = (id: string) => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (mid: string) => api<MigrationJob>(`${base(id)}/migrations/${enc(mid)}/execute`, { method: "POST" }),
-    onSettled: () => qc.invalidateQueries({ queryKey: ["db", id, "jobs"] }),
+    mutationFn: ({ mid, kind }: { mid: string; kind: JobKind }) =>
+      api<ChangeRequest>(`${base(id)}/migrations/${enc(mid)}/change-requests`, { method: "POST", body: JSON.stringify({ kind }) }),
+    onSettled: () => qc.invalidateQueries({ queryKey: ["db", id], predicate: (q) => q.queryKey[2] === "change-requests" || q.queryKey[2] === "migrations" }),
+  });
+};
+
+//[review] mengulang masuk queue untuk pengajuan yang sudah disetujui tetapi belum punya job
+export const useDispatchChangeRequest = (id: string) => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (rid: string) => api<ChangeRequest>(`${base(id)}/change-requests/${enc(rid)}/dispatch`, { method: "POST" }),
+    onSettled: () => qc.invalidateQueries({ queryKey: ["db", id], predicate: (q) => q.queryKey[2] !== "rows" && q.queryKey[2] !== "schema" }),
   });
 };
 

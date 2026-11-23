@@ -16,6 +16,7 @@ export type Group = {
   name: string;
   description: string;
   member_ids: string[];
+  leader_id: string | null; //[review] Team Leader group; wajib ada agar migration database group ini bisa diajukan
   created_at: string;
   updated_at: string;
 };
@@ -76,7 +77,7 @@ export type RowsResponse = {
 };
 
 //[migration] docs/api-contract.md bagian 9
-export type MigrationStatus = "draft" | "success" | "failed";
+export type MigrationStatus = "draft" | "pending_review" | "approved" | "success" | "failed";
 export type Migration = {
   id: string;
   connection_id: string;
@@ -99,6 +100,37 @@ export type Migration = {
   duration_ms: number | null;
 };
 export type MigrationInput = { name: string; sql: string; sql_down?: string; irreversible?: boolean; irreversible_reason?: string };
+
+//[review] pengajuan perubahan (up / rollback / forward) yang harus disetujui Team Leader tiap group
+export type ChangeRequestStatus = "pending_review" | "approved" | "rejected";
+export type ReviewDecision = "approve" | "reject" | "pending";
+export type Reviewer = {
+  group_id: string;
+  group_name?: string; //[review] tidak dikirim setelah keputusan dibuat
+  leader_id: string | null;
+  leader_name: string | null;
+  decision: ReviewDecision;
+  comment: string;
+  decided_at: string | null;
+};
+export type ChangeRequest = {
+  id: string;
+  connection_id: string;
+  migration_id: string;
+  kind: JobKind;
+  rollback_of: string | null;
+  status: ChangeRequestStatus;
+  requested_by: string;
+  job_id: string | null; //[review] terisi setelah disetujui semua dan masuk queue
+  created_at: string;
+  updated_at: string;
+  decided_at: string | null;
+  migration_name: string;
+  connection_name: string;
+  requested_by_name: string;
+  reviewers: Reviewer[];
+  can_decide: boolean;
+};
 
 //[queue] satu permintaan eksekusi di queue; execute menjawab 202 dengan objek ini
 export type JobKind = "up" | "rollback" | "forward";

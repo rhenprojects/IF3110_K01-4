@@ -1,4 +1,4 @@
-import type { AccessEntry, BatchItem, Connection, Group, Migration, MigrationBatch, MigrationExecution, MigrationJob, User } from "../lib/types";
+import type { AccessEntry, BatchItem, ChangeRequest, Connection, Group, Migration, MigrationBatch, MigrationExecution, MigrationJob, User } from "../lib/types";
 import { seedTargets, type Target } from "./target";
 
 export type StoredUser = User & { password: string };
@@ -13,6 +13,7 @@ export type Store = {
   batchItems: Record<string, BatchItem[]>; //[batch] key = batch id
   jobs: MigrationJob[]; //[queue] terbaru di depan
   executions: MigrationExecution[];
+  changeRequests: ChangeRequest[]; //[review] terbaru di depan
 };
 
 const KEY = "mock_db";
@@ -26,8 +27,8 @@ const seed = (): Store => ({
     { id: "u3", username: "sinta", name: "Sinta", is_admin: false, password: "password", created_at: T, updated_at: T },
   ],
   groups: [
-    { id: "g1", name: "Tim Backend", description: "Developer backend", member_ids: ["u2"], created_at: T, updated_at: T },
-    { id: "g2", name: "Tim QA", description: "", member_ids: ["u3"], created_at: T, updated_at: T },
+    { id: "g1", name: "Tim Backend", description: "Developer backend", member_ids: ["u2"], leader_id: "u2", created_at: T, updated_at: T },
+    { id: "g2", name: "Tim QA", description: "", member_ids: ["u3"], leader_id: "u3", created_at: T, updated_at: T },
   ],
   connections: [
     { id: "c1", name: "toko", host: "localhost", port: 5432, db_name: "toko", username: "postgres", ssl_mode: "prefer", created_by: "u1", created_at: T, updated_at: T },
@@ -45,6 +46,7 @@ const seed = (): Store => ({
   batchItems: {},
   jobs: [],
   executions: [],
+  changeRequests: [],
 });
 
 //[mock] riwayat awal agar halaman migration tidak kosong saat demo (urut terbaru dibuat dulu)

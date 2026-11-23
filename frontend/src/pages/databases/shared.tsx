@@ -13,8 +13,10 @@ export function LevelBadge({ level }: { level: AccessLevel }) {
   return <Badge tone={level === "edit" ? "dark" : "neutral"}>{level === "edit" ? "View + Edit" : "View Only"}</Badge>;
 }
 
-const STATUS: Record<MigrationStatus, { tone: "amber" | "green" | "red"; label: string }> = {
+const STATUS: Record<MigrationStatus, { tone: "neutral" | "amber" | "green" | "red"; label: string }> = {
   draft: { tone: "amber", label: "Draft" },
+  pending_review: { tone: "amber", label: "Menunggu review" },
+  approved: { tone: "neutral", label: "Disetujui" },
   success: { tone: "green", label: "Berhasil" },
   failed: { tone: "red", label: "Gagal (rollback)" },
 };
