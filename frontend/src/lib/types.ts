@@ -105,8 +105,8 @@ export type MigrationInput = { name: string; sql: string; sql_down?: string; irr
 export type ChangeRequestStatus = "pending_review" | "approved" | "rejected";
 export type ReviewDecision = "approve" | "reject" | "pending";
 export type Reviewer = {
-  group_id: string;
-  group_name?: string; //[review] tidak dikirim setelah keputusan dibuat
+  group_id?: string; //[review] group_id dan group_name tidak dikirim setelah keputusan dibuat
+  group_name?: string;
   leader_id: string | null;
   leader_name: string | null;
   decision: ReviewDecision;

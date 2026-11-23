@@ -50,9 +50,9 @@ function ReviewPanel({ cr, onDispatch, dispatching }: { cr: ChangeRequest; onDis
       </div>
       {onDispatch && <p className="text-sm text-slate-600">Sudah disetujui semua, tetapi belum masuk queue. Coba masukkan ke queue lagi.</p>}
       <Table columns={["Group", "Team Leader", "Keputusan", "Komentar"]}>
-        {cr.reviewers.map((r) => (
-          <tr key={r.group_id} className="align-top">
-            <td className={td}>{r.group_name ?? r.group_id}</td>
+        {cr.reviewers.map((r, i) => (
+          <tr key={i} className="align-top">
+            <td className={td}>{r.group_name ?? "—"}</td>
             <td className={td}>{r.leader_name ?? "—"}</td>
             <td className={td}><Badge tone={decision[r.decision].tone}>{decision[r.decision].label}</Badge></td>
             <td className={td}>{r.comment || "—"}</td>

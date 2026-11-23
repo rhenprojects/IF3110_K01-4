@@ -132,6 +132,39 @@ function enqueueJob(s: Store, cr: ChangeRequest) {
   return j;
 }
 
+//[review] can_decide dihitung per user seperti field turunan di backend
+const asSeen = (cr: ChangeRequest, userId: string): ChangeRequest =>
+  ({ ...cr, can_decide: cr.status === "pending_review" && cr.reviewers.some((r) => r.decision === "pending" && r.leader_id === userId) });
+
+//[review] setuju / tolak: leader tidak harus anggota group, jadi tidak lewat db()
+const decide = (decision: "approve" | "reject") =>
+  http.post(`${P}/:id/change-requests/:rid/${decision}`, async ({ params, request }) => {
+    const user = currentUser();
+    if (!user) return err(401, "Unauthorized");
+    const s = load();
+    const cr = s.changeRequests.find((c) => c.id === params.rid && c.connection_id === params.id);
+    if (!cr) return err(404, "change request not found");
+    const mine = cr.reviewers.filter((r) => r.leader_id === user.id);
+    if (mine.length === 0) return err(403, "only a group leader of this database can decide");
+    if (cr.status !== "pending_review") return err(409, "change request is no longer pending review");
+    const open = mine.filter((r) => r.decision === "pending");
+    if (open.length === 0) return err(409, "you have already decided");
+    const body = (await request.json().catch(() => ({}))) as { comment?: string };
+    open.forEach((r) => Object.assign(r, { decision, comment: (body.comment ?? "").trim(), decided_at: now() }));
+    const m = s.migrations[cr.connection_id]?.find((x) => x.id === cr.migration_id);
+    if (decision === "reject") {
+      cr.status = "rejected";
+      if (m && cr.kind === "up") Object.assign(m, { status: "draft", updated_at: now() });
+    } else if (cr.reviewers.every((r) => r.decision === "approve")) {
+      cr.status = "approved";
+      if (m && cr.kind === "up") Object.assign(m, { status: "approved", updated_at: now() });
+      enqueueJob(s, cr);
+    }
+    Object.assign(cr, { updated_at: now(), decided_at: cr.status === "pending_review" ? null : now() });
+    save(s);
+    return HttpResponse.json(asSeen(cr, user.id));
+  });
+
 const withName = (s: Store, conn: Connection, j: MigrationJob) =>
   ({ ...j, migration_name: s.migrations[conn.id]?.find((m) => m.id === j.migration_id)?.name });
 
@@ -309,13 +342,37 @@ export const databaseHandlers = [
     };
     if (kind === "up") Object.assign(m, { status: "pending_review", updated_at: now() });
     s.changeRequests.unshift(cr);
-    return HttpResponse.json(cr, { status: 201 });
+    return HttpResponse.json(asSeen(cr, user.id), { status: 201 });
   })),
 
-  http.get(`${P}/:id/change-requests`, db("view", ({ s, conn, url }) => {
+  http.get(`${P}/:id/change-requests`, db("view", ({ s, conn, user, url }) => {
     const status = url.searchParams.get("status");
     const list = s.changeRequests.filter((c) => c.connection_id === conn.id && (!status || c.status === status));
+    return HttpResponse.json({ change_requests: list.map((c) => asSeen(c, user.id)) });
+  })),
+
+  //[review] inbox leader lintas database, paling lama menunggu dulu
+  http.get("/api/v1/change-requests/pending", () => {
+    const user = currentUser();
+    if (!user) return err(401, "Unauthorized");
+    const list = load().changeRequests.map((c) => asSeen(c, user.id)).filter((c) => c.can_decide).reverse();
     return HttpResponse.json({ change_requests: list });
+  }),
+
+  decide("approve"),
+  decide("reject"),
+
+  //[history] semua attempt; hide_rollback membuang eksekusi yang dibatalkan dan rollback suksesnya (dipasangkan lewat execution_id)
+  http.get(`${P}/:id/history`, db("view", ({ s, conn, url }) => {
+    const all = s.executions.filter((x) => x.connection_id === conn.id);
+    const hidden = new Set<string>();
+    if (url.searchParams.get("hide_rollback") === "true") {
+      all.filter((x) => x.kind === "rollback" && x.status === "success" && x.rollback_of).forEach((x) => {
+        hidden.add(x.execution_id);
+        hidden.add(x.rollback_of!);
+      });
+    }
+    return HttpResponse.json({ executions: all.filter((x) => !hidden.has(x.execution_id)) });
   })),
 
   //[review] untuk pengajuan yang sudah disetujui tetapi belum masuk queue

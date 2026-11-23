@@ -29,6 +29,7 @@ export function AppLayout() {
         <Link to="/" className="font-semibold">DB Platform</Link>
         <nav className="flex gap-1">
           <NavLink to="/databases" className={link}>Databases</NavLink>
+          <NavLink to="/reviews" className={link}>Review</NavLink>
           {user?.is_admin && <NavLink to="/admin" className={link}>Admin</NavLink>}
         </nav>
         <div className="ml-auto flex items-center gap-3 text-sm">

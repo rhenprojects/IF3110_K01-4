@@ -79,6 +79,29 @@ export const useDispatchChangeRequest = (id: string) => {
   });
 };
 
+//[review] inbox Team Leader lintas database: permintaan yang menunggu keputusan user ini
+export const usePendingReviews = () =>
+  useQuery({
+    queryKey: ["db", "pending-reviews"], retry: false,
+    queryFn: () => api<{ change_requests: ChangeRequest[] }>("/change-requests/pending").then((r) => r.change_requests),
+  });
+
+export const useDecideChangeRequest = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ dbId, rid, decision, comment }: { dbId: string; rid: string; decision: "approve" | "reject"; comment: string }) =>
+      api<ChangeRequest>(`${base(dbId)}/change-requests/${enc(rid)}/${decision}`, { method: "POST", body: JSON.stringify({ comment }) }),
+    onSettled: () => qc.invalidateQueries({ queryKey: ["db"] }),
+  });
+};
+
+//[history] seluruh attempt eksekusi database ini; hideRollback menyembunyikan pasangan eksekusi yang dibatalkan dan rollback-nya
+export const useHistory = (id: string, hideRollback: boolean) =>
+  useQuery({
+    queryKey: ["db", id, "history", hideRollback], retry: false,
+    queryFn: () => api<{ executions: MigrationExecution[] }>(`${base(id)}/history${hideRollback ? "?hide_rollback=true" : ""}`).then((r) => r.executions),
+  });
+
 //[queue] polling hanya selama masih ada job yang belum selesai
 const pending = (status?: string) => status === "queued" || status === "running" || status === "uncertain";
 
