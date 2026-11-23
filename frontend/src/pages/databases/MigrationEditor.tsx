@@ -41,7 +41,7 @@ function EditorForm({ db, mid, initial }: { db: DatabaseItem; mid?: string; init
       </Field>
       <Field label="SQL" error={fieldError(save.error, "sql")}
         hint={`${sql.split("\n").length} baris · ${sql.length} karakter`}>
-        <textarea className={`${inputCls} h-72 font-mono`} value={sql} spellCheck={false}
+        <textarea wrap="off" className={`${inputCls} h-72 resize-y overflow-auto whitespace-pre font-mono`} value={sql} spellCheck={false}
           placeholder="ALTER TABLE customers ADD COLUMN phone text;" onChange={(e) => setSql(e.target.value)} required />
       </Field>
       {isDestructive(sql) && (
@@ -61,7 +61,7 @@ function EditorForm({ db, mid, initial }: { db: DatabaseItem; mid?: string; init
       ) : (
         <Field label="SQL down (rollback)" error={fieldError(save.error, "sql_down")}
           hint="Membatalkan SQL di atas. Wajib sebelum migration bisa dijalankan.">
-          <textarea className={`${inputCls} h-40 font-mono`} value={sqlDown} spellCheck={false}
+          <textarea wrap="off" className={`${inputCls} h-40 resize-y overflow-auto whitespace-pre font-mono`} value={sqlDown} spellCheck={false}
             placeholder="ALTER TABLE customers DROP COLUMN phone;" onChange={(e) => setSqlDown(e.target.value)} />
         </Field>
       )}
@@ -70,7 +70,7 @@ function EditorForm({ db, mid, initial }: { db: DatabaseItem; mid?: string; init
         satu migration pada satu waktu. Seluruh SQL berada dalam satu transaction (COMMIT jika sukses, ROLLBACK jika gagal), jadi
         perintah seperti CREATE INDEX CONCURRENTLY akan gagal. SQL up dan down tidak bisa diubah lagi setelah masuk queue.
       </p>
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-2">
         <Button type="submit" variant="primary" disabled={save.isPending}>Simpan draft</Button>
         <Button onClick={() => nav(-1)}>Batal</Button>
       </div>

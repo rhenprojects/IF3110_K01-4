@@ -30,8 +30,8 @@ export default function Login() {
   }
 
   return (
-    <div className="grid min-h-screen place-items-center bg-slate-50">
-      <form onSubmit={submit} className="w-80 space-y-4 rounded-lg border bg-white p-6 shadow-sm">
+    <div className="grid min-h-screen place-items-center bg-slate-50 p-4">
+      <form onSubmit={submit} className="w-full max-w-sm space-y-4 rounded-lg border bg-white p-6 shadow-sm">
         <h1 className="text-lg font-semibold">Masuk</h1>
         <label className="block text-sm">
           Username

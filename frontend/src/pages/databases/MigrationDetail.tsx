@@ -143,7 +143,7 @@ export default function MigrationDetail() {
     <div className="space-y-5">
       <Link to={`/databases/${db.id}/migrations`} className="text-sm text-slate-500 hover:underline">← Riwayat migration</Link>
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="flex items-center gap-3 text-lg font-semibold">
+        <h2 className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 break-words text-lg font-semibold">
           {m.version && <span className="font-mono text-slate-400">v{m.version}</span>}{m.name} <StatusBadge status={m.status} />
         </h2>
         {editable && !busy && (
