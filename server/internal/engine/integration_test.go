@@ -126,7 +126,7 @@ func (f *fixture) engine() *engine.Engine {
 func (f *fixture) migration(connID, name, up, down string) models.Migration {
 	f.t.Helper()
 	m := models.Migration{ConnectionID: connID, Name: name, SQL: up, SQLDown: down, Revision: 1,
-		Status: models.MigrationDraft, CreatedBy: f.userID}
+		Status: models.MigrationApproved, CreatedBy: f.userID}
 	if err := f.db.Create(&m).Error; err != nil {
 		f.t.Fatal(err)
 	}
@@ -593,6 +593,14 @@ func TestIntegrationEnqueueRejectsInvalidRequests(t *testing.T) {
 	}
 	if err := req(ok.ID, models.JobKindForward, ""); !errors.Is(err, engine.ErrNotExecutable) {
 		t.Errorf("forward before up: %v", err)
+	}
+	for _, status := range []models.MigrationStatus{models.MigrationDraft, models.MigrationPendingReview} {
+		unapproved := models.Migration{ConnectionID: f.connID, Name: string(status), SQL: `SELECT 1`, SQLDown: `SELECT 1`,
+			Revision: 1, Status: status, CreatedBy: f.userID}
+		f.db.Create(&unapproved)
+		if err := req(unapproved.ID, models.JobKindUp, ""); !errors.Is(err, engine.ErrNotExecutable) {
+			t.Errorf("up while %s: %v", status, err)
+		}
 	}
 	if err := req(ok.ID, models.JobKind("sideways"), ""); !errors.Is(err, engine.ErrInvalidKind) {
 		t.Errorf("unknown kind: %v", err)

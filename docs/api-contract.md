@@ -439,25 +439,8 @@ Izin:
 | `GET /databases/:id/migrations/:mid` | Detail satu migration |
 | `POST /databases/:id/migrations` | Buat draft. Body `{ "name": "…", "sql": "…" }`. Response `201` + `Migration` berstatus `draft` |
 | `PUT /databases/:id/migrations/:mid` | Ubah draft. Body `{ "name": "…", "sql": "…" }`. Response `200`. `409` kalau statusnya bukan `draft` |
-| `POST /databases/:id/migrations/:mid/execute` | Jalankan draft |
 
 Aturan input `POST` dan `PUT`: `name` wajib, maksimal 200 karakter. `sql` wajib, tidak boleh kosong.
-
-### Alur `execute`
-
-1. Cek user punya akses `edit`. Kalau tidak, `403`.
-2. Kalau statusnya bukan `draft`, `409`.
-3. Kalau ada migration lain di database yang sama yang sedang berjalan, `409`.
-4. Buka transaction di database target dan jalankan SQL.
-5. Hasilnya:
-
-| Hasil | Yang terjadi | Response |
-|---|---|---|
-| SQL berhasil | `COMMIT`. Status `success`, `version` = versi sukses terakhir + 1, `executed_by`, `executed_at`, dan `duration_ms` terisi | `200` + `Migration` |
-| SQL error | `ROLLBACK`. Status `failed`, `error` berisi pesan Postgres, `version` tetap `null` | `200` + `Migration` |
-| Database target tidak terjangkau | Tidak ada yang dijalankan. Status tetap `draft` | `502` atau `504` |
-
-Kenapa SQL gagal tetap `200`? Karena permintaannya sendiri sudah diproses dengan benar dan hasilnya tercatat di riwayat. Klien cukup membaca field `status`.
 
 ### Review dan approval (change request)
 

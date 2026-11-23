@@ -262,15 +262,16 @@ func (e *env) createMigration(userID, name, sql string) models.Migration {
 	return m
 }
 
-// execute memasukkan migration ke queue lalu menunggu worker menyelesaikan job-nya
+// execute mengajukan migration lewat review, menyetujuinya sebagai leader kedua group, lalu menunggu worker
+// menyelesaikan job-nya. Status yang dikembalikan adalah status pengajuan; jika ditolak, tidak ada approval.
 func (e *env) execute(userID, migrationID string) (int, models.Migration, string) {
 	e.t.Helper()
-	var job models.MigrationJob
-	status, raw := e.do(userID, "POST", e.dbPath("migrations", migrationID, "execute"), nil, &job)
-	if status != fiber.StatusAccepted {
+	e.setLeaders(e.editor, e.viewer)
+	status, cr, raw := e.submit(userID, migrationID, models.JobKindUp)
+	if status != fiber.StatusCreated {
 		return status, models.Migration{}, raw
 	}
-	e.waitJob(job.ID)
+	e.approveAndWait(cr, e.editor, e.viewer)
 	var m models.Migration
 	_, raw = e.do(userID, "GET", e.dbPath("migrations", migrationID), nil, &m)
 	return status, m, raw
@@ -488,7 +489,7 @@ func TestIntegrationMigrationLifecycle(t *testing.T) {
 	}
 
 	status, done, raw := e.execute(e.editor, draft.ID)
-	if status != fiber.StatusAccepted || done.Status != models.MigrationSuccess || done.Version == nil || *done.Version != 1 {
+	if status != fiber.StatusCreated || done.Status != models.MigrationSuccess || done.Version == nil || *done.Version != 1 {
 		t.Fatalf("execute: status %d body %s", status, raw)
 	}
 
@@ -547,7 +548,7 @@ func TestIntegrationMigrationRollbackOnFailure(t *testing.T) {
 	broken := e.createMigration(e.editor, "half broken",
 		`CREATE TABLE `+s+`.half_done (id int); INSERT INTO `+s+`.does_not_exist VALUES (1);`)
 	status, failed, raw := e.execute(e.editor, broken.ID)
-	if status != fiber.StatusAccepted || failed.Status != models.MigrationFailed || failed.Version != nil {
+	if status != fiber.StatusCreated || failed.Status != models.MigrationFailed || failed.Version != nil {
 		t.Fatalf("failed migration: status %d body %s", status, raw)
 	}
 	if !strings.Contains(failed.Error, "does_not_exist") || failed.ExecutedBy == nil || failed.ExecutedAt == nil {
@@ -583,7 +584,7 @@ func TestIntegrationMigrationAccessControl(t *testing.T) {
 	writes := []struct{ method, path string }{
 		{"POST", e.dbPath("migrations")},
 		{"PUT", e.dbPath("migrations", draft.ID)},
-		{"POST", e.dbPath("migrations", draft.ID, "execute")},
+		{"POST", e.dbPath("migrations", draft.ID, "change-requests")},
 	}
 	for _, w := range writes {
 		if status, _ := e.do("", w.method, w.path, body, nil); status != fiber.StatusUnauthorized {
@@ -649,21 +650,22 @@ func TestIntegrationMigrationValidationAndNotFound(t *testing.T) {
 func TestIntegrationExecuteRequiresDownOrIrreversible(t *testing.T) {
 	e := setup(t)
 	s := pgx.Identifier{e.schema}.Sanitize()
+	e.setLeaders(e.editor, e.viewer)
 
 	var draft models.Migration
 	e.do(e.editor, "POST", e.dbPath("migrations"), map[string]string{"name": "no down", "sql": `CREATE TABLE ` + s + `.no_down (id int)`}, &draft)
-	if status, raw := e.do(e.editor, "POST", e.dbPath("migrations", draft.ID, "execute"), nil, nil); status != fiber.StatusBadRequest || !strings.Contains(raw, `"field":"sql_down"`) {
+	if status, _, raw := e.submit(e.editor, draft.ID, models.JobKindUp); status != fiber.StatusBadRequest || !strings.Contains(raw, `"field":"sql_down"`) {
 		t.Errorf("execute without sql_down: status %d body %s", status, raw)
 	}
 
 	var irr models.Migration
 	e.do(e.editor, "POST", e.dbPath("migrations"), map[string]any{"name": "wipe", "sql": `DELETE FROM ` + s + `.orders`, "irreversible": true}, &irr)
-	if status, raw := e.do(e.editor, "POST", e.dbPath("migrations", irr.ID, "execute"), nil, nil); status != fiber.StatusBadRequest || !strings.Contains(raw, `"field":"irreversible_reason"`) {
+	if status, _, raw := e.submit(e.editor, irr.ID, models.JobKindUp); status != fiber.StatusBadRequest || !strings.Contains(raw, `"field":"irreversible_reason"`) {
 		t.Errorf("irreversible without reason: status %d body %s", status, raw)
 	}
 	e.do(e.editor, "PUT", e.dbPath("migrations", irr.ID), map[string]any{"name": "wipe", "sql": `DELETE FROM ` + s + `.orders`,
 		"irreversible": true, "irreversible_reason": "deleted rows cannot be restored"}, nil)
-	if status, m, raw := e.execute(e.editor, irr.ID); status != fiber.StatusAccepted || m.Status != models.MigrationSuccess || !m.Irreversible {
+	if status, m, raw := e.execute(e.editor, irr.ID); status != fiber.StatusCreated || m.Status != models.MigrationSuccess || !m.Irreversible {
 		t.Errorf("irreversible with reason: status %d body %s", status, raw)
 	}
 
@@ -677,21 +679,22 @@ func TestIntegrationJobStatusEndpoints(t *testing.T) {
 	s := pgx.Identifier{e.schema}.Sanitize()
 	m := e.createMigration(e.editor, "queued", `CREATE TABLE `+s+`.queued_table (id int)`)
 
-	var job models.MigrationJob
-	status, raw := e.do(e.editor, "POST", e.dbPath("migrations", m.ID, "execute"), nil, &job)
-	if status != fiber.StatusAccepted || job.ID == "" || job.ExecutionID == "" || job.Kind != models.JobKindUp || job.Status != models.JobQueued {
-		t.Fatalf("enqueue: status %d body %s", status, raw)
+	e.setLeaders(e.editor, e.viewer)
+	status, cr, raw := e.submit(e.editor, m.ID, models.JobKindUp)
+	if status != fiber.StatusCreated {
+		t.Fatalf("submit: status %d body %s", status, raw)
 	}
-	if status, _ := e.do(e.editor, "POST", e.dbPath("migrations", m.ID, "execute"), nil, nil); status != fiber.StatusConflict {
-		t.Errorf("duplicate enqueue: status %d, want 409", status)
+	if status, _, _ := e.submit(e.editor, m.ID, models.JobKindUp); status != fiber.StatusConflict {
+		t.Errorf("duplicate submit: status %d, want 409", status)
 	}
-	done := e.waitJob(job.ID)
-	if done.Status != models.JobSuccess || done.Attempts != 1 || done.FinishedAt == nil || done.MigrationName != "queued" {
+	done := e.approveAndWait(cr, e.editor, e.viewer)
+	if done.ID == "" || done.ExecutionID == "" || done.Kind != models.JobKindUp ||
+		done.Status != models.JobSuccess || done.Attempts != 1 || done.FinishedAt == nil || done.MigrationName != "queued" {
 		t.Errorf("finished job = %+v", done)
 	}
 
 	var list models.JobListResponse
-	if status, _ := e.do(e.viewer, "GET", e.dbPath("jobs"), nil, &list); status != fiber.StatusOK || len(list.Jobs) != 1 || list.Jobs[0].ID != job.ID {
+	if status, _ := e.do(e.viewer, "GET", e.dbPath("jobs"), nil, &list); status != fiber.StatusOK || len(list.Jobs) != 1 || list.Jobs[0].ID != done.ID {
 		t.Errorf("job list = %+v", list)
 	}
 	if status, _ := e.do(e.viewer, "GET", e.dbPath("jobs", "not-a-uuid"), nil, nil); status != fiber.StatusNotFound {

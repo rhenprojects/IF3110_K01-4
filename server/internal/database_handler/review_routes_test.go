@@ -14,12 +14,18 @@ import (
 func (e *env) assignLeaders() (leaderA, leaderB string) {
 	e.t.Helper()
 	leaderA, leaderB = e.createUser("leader-a-"+e.schema), e.createUser("leader-b-"+e.schema)
-	for i, leader := range []string{leaderA, leaderB} {
+	e.setLeaders(leaderA, leaderB)
+	return leaderA, leaderB
+}
+
+// setLeaders menetapkan leader group editor dan group viewer (berurutan).
+func (e *env) setLeaders(editorGroupLeader, viewerGroupLeader string) {
+	e.t.Helper()
+	for i, leader := range []string{editorGroupLeader, viewerGroupLeader} {
 		if err := e.db.Model(&models.Group{}).Where("id = ?", e.groupIDs[i]).Update("leader_id", leader).Error; err != nil {
 			e.t.Fatalf("set leader: %v", err)
 		}
 	}
-	return leaderA, leaderB
 }
 
 func (e *env) submit(userID, migrationID string, kind models.JobKind) (int, models.ChangeRequest, string) {

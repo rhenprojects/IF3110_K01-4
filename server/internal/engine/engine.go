@@ -89,18 +89,6 @@ func New(db *gorm.DB, pools PoolProvider, opts Options) (*Engine, error) {
 // Locker dipakai komponen lain (mis. batch) agar memakai lock yang sama.
 func (e *Engine) Locker() *Locker { return e.locker }
 
-// TODO(approval-workflow): draft masih diizinkan karena alur review dan
-// approval belum tersambung ke engine. Setelah status approval ada di models:
-//   - hapus MigrationDraft dari map ini;
-//   - ganti MigrationStatus("approved") dengan konstanta dari models;
-//   - perbarui CHECK constraint chk_migrations_status agar menerima status baru;
-//   - sesuaikan test yang meng-enqueue draft (engine, database_handler,
-//     scripts/invoker.sh) agar migration di-approve terlebih dahulu.
-var upExecutable = map[models.MigrationStatus]bool{
-	models.MigrationDraft:              true,
-	models.MigrationStatus("approved"): true,
-}
-
 type EnqueueRequest struct {
 	ConnectionID string
 	MigrationID  string
@@ -131,7 +119,7 @@ func (e *Engine) Enqueue(ctx context.Context, req EnqueueRequest) (job *models.M
 	var rollbackOf *string
 	switch req.Kind {
 	case models.JobKindUp:
-		if !upExecutable[m.Status] {
+		if m.Status != models.MigrationApproved {
 			return nil, ErrNotExecutable
 		}
 		if err := ValidateDefinition(&m); err != nil {

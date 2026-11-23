@@ -78,7 +78,6 @@ func (h *Handler) RegisterRoutes(router fiber.Router) {
 	g.Get("/:id/migrations/:mid", h.GetMigration)
 	g.Post("/:id/migrations", h.CreateMigration)
 	g.Put("/:id/migrations/:mid", h.UpdateMigration)
-	g.Post("/:id/migrations/:mid/execute", h.ExecuteMigration)
 	g.Get("/:id/migrations/:mid/executions", h.ListMigrationExecutions)
 	g.Post("/:id/migrations/:mid/change-requests", h.SubmitChangeRequest)
 	g.Get("/:id/change-requests", h.ListChangeRequests)
@@ -290,25 +289,6 @@ func (h *Handler) UpdateMigration(c *fiber.Ctx) error {
 		return h.writeError(c, err)
 	}
 	return c.JSON(migration)
-}
-
-// ExecuteMigration memasukkan eksekusi ke queue dan langsung mengembalikan job; SQL dijalankan worker secara asynchronous
-// Status dipantau lewat GET /databases/:id/jobs/:jid.
-func (h *Handler) ExecuteMigration(c *fiber.Ctx) error {
-	conn, _, err := h.accessible(c, true)
-	if err != nil {
-		return h.writeError(c, err)
-	}
-	job, err := h.engine.Enqueue(c.UserContext(), engine.EnqueueRequest{
-		ConnectionID: conn.ID,
-		MigrationID:  c.Params("mid"),
-		Kind:         models.JobKindUp,
-		RequestedBy:  authctx.UserID(c),
-	})
-	if err != nil {
-		return h.writeError(c, err)
-	}
-	return c.Status(fiber.StatusAccepted).JSON(job)
 }
 
 func (h *Handler) ListJobs(c *fiber.Ctx) error {

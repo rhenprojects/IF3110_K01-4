@@ -102,7 +102,7 @@
 | Lebih dari 200 ID | 400 |
 | `execution_id` palsu di body | 202, ID server dipakai |
 | `PUT`/`DELETE /executions` | 405 |
-| `POST /migrations/:mid/execute` non-draft | 409 |
+| `POST /migrations/:mid/change-requests` (`up`) non-draft | 409 |
 | SQL error `SELECT 1/0` | 200, `status=failed`, rollback |
 | Target tidak terjangkau | 502/504, status tetap `draft` |
 | `GET /api/v1/metrics` | 404; metrik hanya di `:9101` |
