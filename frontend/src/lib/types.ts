@@ -20,7 +20,7 @@ export type Group = {
   created_at: string;
   updated_at: string;
 };
-export type GroupInput = { name: string; description?: string };
+export type GroupInput = { name: string; description?: string; leader_id?: string };
 
 export type SSLMode = "disable" | "allow" | "prefer" | "require" | "verify-ca" | "verify-full";
 export type Connection = {
