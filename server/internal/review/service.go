@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -246,6 +247,15 @@ func (s *Service) Dispatch(ctx context.Context, requestID string) (*models.Chang
 			return &cr, fmt.Errorf("%w: rollback target changed", ErrStale)
 		}
 	}
+	if cr.Kind == models.JobKindForward {
+		var m models.Migration
+		if err := s.db.WithContext(ctx).First(&m, "id = ?", cr.MigrationID).Error; err != nil {
+			return nil, err
+		}
+		if err := forwardCheck(s.db.WithContext(ctx), &m); err != nil {
+			return &cr, fmt.Errorf("%w: %w", ErrStale, err)
+		}
+	}
 
 	jobID, err := s.deps.Enqueue(ctx, cr)
 	if err != nil {
@@ -316,6 +326,10 @@ func loadHistory(tx *gorm.DB, connectionID string) ([]workflow.Execution, error)
 	if err := tx.Where("connection_id = ?", connectionID).Order("id").Find(&rows).Error; err != nil {
 		return nil, err
 	}
+	return collapse(rows), nil
+}
+
+func collapse(rows []models.MigrationExecution) []workflow.Execution {
 	var history []workflow.Execution
 	index := make(map[string]int)
 	for _, r := range rows {
@@ -335,7 +349,30 @@ func loadHistory(tx *gorm.DB, connectionID string) ([]workflow.Execution, error)
 		index[r.ExecutionID] = len(history)
 		history = append(history, e)
 	}
-	return history, nil
+	return history
+}
+
+// History mengembalikan seluruh attempt di sebuah database secara kronologis. Dengan hideRollback, eksekusi yang
+// dibatalkan dan rollback sukses yang membatalkannya disembunyikan
+func (s *Service) History(ctx context.Context, connectionID string, hideRollback bool) ([]models.MigrationExecution, error) {
+	rows := make([]models.MigrationExecution, 0)
+	if err := s.db.WithContext(ctx).Where("connection_id = ?", connectionID).Order("id").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	if !hideRollback {
+		return rows, nil
+	}
+	visible := make(map[string]bool)
+	for _, e := range workflow.HideRollback(collapse(rows)) {
+		visible[e.ID] = true
+	}
+	shown := make([]models.MigrationExecution, 0, len(rows))
+	for _, r := range rows {
+		if visible[r.ExecutionID] {
+			shown = append(shown, r)
+		}
+	}
+	return shown, nil
 }
 
 func rollbackTarget(tx *gorm.DB, m *models.Migration) (workflow.Execution, error) {
@@ -365,7 +402,11 @@ func forwardCheck(tx *gorm.DB, m *models.Migration) error {
 	if err != nil {
 		return err
 	}
-	return workflow.CheckForward(m.ID, migrationOrder(history), history)
+	order := migrationOrder(history)
+	if !slices.Contains(order, m.ID) {
+		order = append(order, m.ID) // belum pernah dieksekusi: CheckForward menolaknya sebagai ErrNeverExecuted
+	}
+	return workflow.CheckForward(m.ID, order, history)
 }
 
 func isUniqueViolation(err error) bool {

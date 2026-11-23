@@ -12,6 +12,7 @@ import (
 	"web_backend/internal/engine"
 	"web_backend/internal/httpx"
 	"web_backend/internal/models"
+	"web_backend/internal/review"
 	"web_backend/internal/targetdb"
 
 	"github.com/gofiber/fiber/v2"
@@ -34,6 +35,7 @@ type Handler struct {
 	db     *gorm.DB
 	svc    *targetdb.Service
 	engine *engine.Engine
+	review *review.Service
 }
 
 func NewHandler(db *gorm.DB, svc *targetdb.Service) *Handler {
@@ -47,7 +49,11 @@ func NewHandlerWithEngine(db *gorm.DB, svc *targetdb.Service, eng *engine.Engine
 			eng = created
 		}
 	}
-	return &Handler{db: db, svc: svc, engine: eng}
+	h := &Handler{db: db, svc: svc, engine: eng}
+	if db != nil && eng != nil {
+		h.review = review.New(db, review.Deps{Enqueue: reviewEnqueue(eng), Validate: engine.ValidateDefinition})
+	}
+	return h
 }
 
 // Engine mengembalikan execution engine yang dipakai handler ini.
@@ -74,6 +80,11 @@ func (h *Handler) RegisterRoutes(router fiber.Router) {
 	g.Put("/:id/migrations/:mid", h.UpdateMigration)
 	g.Post("/:id/migrations/:mid/execute", h.ExecuteMigration)
 	g.Get("/:id/migrations/:mid/executions", h.ListMigrationExecutions)
+	g.Post("/:id/migrations/:mid/change-requests", h.SubmitChangeRequest)
+	g.Get("/:id/change-requests", h.ListChangeRequests)
+	g.Post("/:id/change-requests/:rid/approve", h.ApproveChangeRequest)
+	g.Post("/:id/change-requests/:rid/reject", h.RejectChangeRequest)
+	g.Get("/:id/history", h.ListHistory)
 	g.Get("/:id/jobs", h.ListJobs)
 	g.Get("/:id/jobs/:jid", h.GetJob)
 }
@@ -476,8 +487,17 @@ func (h *Handler) writeError(c *fiber.Ctx, err error) error {
 	case errors.Is(err, engine.ErrJobActive), errors.Is(err, engine.ErrNotExecutable),
 		errors.Is(err, engine.ErrIrreversible), errors.Is(err, ErrMigrationImmutable):
 		return httpx.Error(c, fiber.StatusConflict, err.Error())
-	case errors.Is(err, engine.ErrRollbackTarget), errors.Is(err, engine.ErrInvalidKind):
+	case errors.Is(err, engine.ErrRollbackTarget), errors.Is(err, engine.ErrInvalidKind), errors.Is(err, review.ErrInvalidKind):
 		return httpx.Error(c, fiber.StatusBadRequest, err.Error())
+	case errors.Is(err, review.ErrMigrationNotFound), errors.Is(err, review.ErrRequestNotFound):
+		return httpx.Error(c, fiber.StatusNotFound, err.Error())
+	case errors.Is(err, review.ErrNotLeader), errors.Is(err, review.ErrEditAccessRequired):
+		return httpx.Error(c, fiber.StatusForbidden, err.Error())
+	case isReviewConflict(err):
+		return httpx.Error(c, fiber.StatusConflict, err.Error())
+	case errors.Is(err, review.ErrDispatchFailed):
+		log.Printf("[database] %v", err)
+		return httpx.Error(c, fiber.StatusBadGateway, review.ErrDispatchFailed.Error())
 	case errors.Is(err, ErrDatabaseNotFound):
 		return httpx.Error(c, fiber.StatusNotFound, ErrDatabaseNotFound.Error())
 	case errors.Is(err, ErrNoDatabaseAccess), errors.Is(err, ErrEditAccessRequired):

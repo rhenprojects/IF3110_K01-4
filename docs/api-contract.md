@@ -459,6 +459,28 @@ Aturan input `POST` dan `PUT`: `name` wajib, maksimal 200 karakter. `sql` wajib,
 
 Kenapa SQL gagal tetap `200`? Karena permintaannya sendiri sudah diproses dengan benar dan hasilnya tercatat di riwayat. Klien cukup membaca field `status`.
 
+### Review dan approval (change request)
+
+Setiap perubahan (`up`, `rollback`, `forward`) diajukan sebagai change request dan harus disetujui leader dari **setiap group yang punya akses** ke database (`view` maupun `edit`). Setelah leader terakhir menyetujui, permintaan otomatis masuk queue dan `job_id` terisi. Satu leader yang memimpin beberapa group cukup menyetujui sekali. Satu migration hanya boleh punya satu change request yang menunggu review.
+
+| Endpoint | Fungsi |
+|---|---|
+| `POST /databases/:id/migrations/:mid/change-requests` | Ajukan perubahan. Body `{ "kind": "up" \| "rollback" \| "forward" }`. Harus `edit`. Response `201` + `ChangeRequest` berstatus `pending_review` |
+| `GET /databases/:id/change-requests?limit=50` | Daftar change request, terbaru dulu. Response `{ "change_requests": [...] }`. Minimal `view` |
+| `POST /databases/:id/change-requests/:rid/approve` | Setujui. Body opsional `{ "comment": "…" }`. Hanya leader group yang punya akses ke database ini |
+| `POST /databases/:id/change-requests/:rid/reject` | Tolak. Body opsional `{ "comment": "…" }`. Sama dengan approve; migration `up` kembali menjadi `draft` |
+| `GET /databases/:id/history?hide_rollback=true` | Seluruh attempt eksekusi database ini secara kronologis (termasuk yang gagal). Dengan `hide_rollback=true`, eksekusi yang dibatalkan dan rollback sukses yang membatalkannya (dipasangkan lewat execution ID) disembunyikan. Minimal `view` |
+
+Bentuk `ChangeRequest`: `id`, `connection_id`, `migration_id`, `kind`, `rollback_of` (execution ID yang dibatalkan, khusus `rollback`), `status` (`pending_review` \| `approved` \| `rejected`), `requested_by`, `job_id` (terisi setelah masuk queue), `created_at`, `updated_at`, `decided_at`.
+
+| Status | Penyebab |
+|---|---|
+| `400` | `kind` tidak dikenal, atau definisi migration tidak valid |
+| `403` | Bukan `edit` (saat mengajukan), atau bukan leader group database ini (saat approve/reject) |
+| `404` | Migration atau change request tidak ada di database ini |
+| `409` | Migration bukan `draft` (untuk `up`), sudah ada permintaan yang menunggu, ada group tanpa leader, leader sudah memutuskan, permintaan sudah tidak menunggu review, rollback/forward tidak sesuai urutan linear (bukan migration aktif terakhir, sudah aktif, belum pernah dieksekusi, irreversible), atau permintaan sudah basi saat akan masuk queue |
+| `502` | Disetujui tetapi gagal dimasukkan ke queue |
+
 ---
 
 ## 10. Tabel izin ringkas

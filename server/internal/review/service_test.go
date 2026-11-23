@@ -550,3 +550,67 @@ func TestForward_Rejections(t *testing.T) {
 		t.Errorf("migration pertama harus boleh di-forward: %v", err)
 	}
 }
+
+func TestDispatch_StaleForwardIsRefused(t *testing.T) {
+	e := newEnv(t)
+	a := e.migration(models.MigrationSuccess, "x", false)
+	b := e.migration(models.MigrationSuccess, "x", false)
+	aExec, bExec := uuid.NewString(), uuid.NewString()
+	e.execution(a, aExec, 1, models.JobKindUp, models.ExecutionSuccess, nil)
+	e.execution(b, bExec, 1, models.JobKindUp, models.ExecutionSuccess, nil)
+	e.execution(b, uuid.NewString(), 1, models.JobKindRollback, models.ExecutionSuccess, &bExec)
+	cr := e.submit(b, models.JobKindForward)
+	e.q.err = errors.New("queue down")
+	if _, err := e.svc.Approve(ctx, e.leaderA, cr.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.svc.Approve(ctx, e.leaderB, cr.ID, ""); !errors.Is(err, ErrDispatchFailed) {
+		t.Fatalf("approve terakhir: %v", err)
+	}
+
+	// A dibatalkan sebelum dispatch ulang, sehingga forward B melompati urutan.
+	e.execution(a, uuid.NewString(), 1, models.JobKindRollback, models.ExecutionSuccess, &aExec)
+	e.q.err = nil
+
+	if _, err := e.svc.Dispatch(ctx, cr.ID); !errors.Is(err, ErrStale) {
+		t.Fatalf("error = %v", err)
+	}
+	if len(e.q.calls) != 0 {
+		t.Error("permintaan basi tidak boleh masuk queue")
+	}
+}
+
+// Contoh riwayat di spesifikasi: A [E1], B [E2], B rollback [E3], B forward [E4], C [E5].
+func TestHistory_HideRollback(t *testing.T) {
+	e := newEnv(t)
+	a := e.migration(models.MigrationSuccess, "x", false)
+	b := e.migration(models.MigrationSuccess, "x", false)
+	c := e.migration(models.MigrationSuccess, "x", false)
+	e1, e2, e3, e4, e5 := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
+	e.execution(a, e1, 1, models.JobKindUp, models.ExecutionSuccess, nil)
+	e.execution(b, e2, 1, models.JobKindUp, models.ExecutionSuccess, nil)
+	e.execution(b, e3, 1, models.JobKindRollback, models.ExecutionSuccess, &e2)
+	e.execution(b, e4, 1, models.JobKindForward, models.ExecutionSuccess, nil)
+	e.execution(c, e5, 1, models.JobKindUp, models.ExecutionFailed, nil)
+	e.execution(c, e5, 2, models.JobKindUp, models.ExecutionSuccess, nil)
+
+	ids := func(hide bool) []string {
+		rows, err := e.svc.History(ctx, e.connID, hide)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, r := range rows {
+			got = append(got, fmt.Sprintf("%s#%d", r.ExecutionID, r.Attempt))
+		}
+		return got
+	}
+	want := func(items ...string) []string { return items }
+
+	if got, full := ids(false), want(e1+"#1", e2+"#1", e3+"#1", e4+"#1", e5+"#1", e5+"#2"); fmt.Sprint(got) != fmt.Sprint(full) {
+		t.Errorf("riwayat lengkap = %v, mau %v", got, full)
+	}
+	if got, hidden := ids(true), want(e1+"#1", e4+"#1", e5+"#1", e5+"#2"); fmt.Sprint(got) != fmt.Sprint(hidden) {
+		t.Errorf("hide rollback = %v, mau %v (E2 dan E3 disembunyikan, attempt gagal tetap tampil)", got, hidden)
+	}
+}

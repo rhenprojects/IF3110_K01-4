@@ -30,6 +30,10 @@ type ChangeRequest struct {
 
 func (ChangeRequest) TableName() string { return "change_requests" }
 
+type ChangeRequestListResponse struct {
+	ChangeRequests []ChangeRequest `json:"change_requests"`
+}
+
 type ApprovalDecision string
 
 const (

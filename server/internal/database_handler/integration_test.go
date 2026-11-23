@@ -56,7 +56,7 @@ func setup(t *testing.T) *env {
 		t.Fatalf("open db: %v", err)
 	}
 	if err := db.Migrator().DropTable(
-		&models.MigrationExecution{}, &models.MigrationJob{},
+		&models.Approval{}, &models.ChangeRequest{}, &models.MigrationExecution{}, &models.MigrationJob{},
 		&models.Session{}, &models.Migration{}, &models.GroupDatabaseAccess{}, &models.GroupMember{},
 		&models.Group{}, &models.DBConnection{}, &models.User{},
 	); err != nil {
@@ -65,7 +65,7 @@ func setup(t *testing.T) *env {
 	if err := db.AutoMigrate(
 		&models.User{}, &models.Group{}, &models.GroupMember{}, &models.Session{},
 		&models.DBConnection{}, &models.GroupDatabaseAccess{}, &models.Migration{},
-		&models.MigrationJob{}, &models.MigrationExecution{},
+		&models.MigrationJob{}, &models.MigrationExecution{}, &models.ChangeRequest{}, &models.Approval{},
 	); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
