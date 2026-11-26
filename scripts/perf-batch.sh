@@ -34,11 +34,26 @@ call() {
 	if [ -n "$data" ]; then args+=(-d "$data"); fi
 	curl "${args[@]}" "$BASE_URL$path"
 }
+seed_drafts() { # count sql label -> ID per line
+	local count=$1 sql=$2 label=$3 i status
+	for i in $(seq 1 "$count"); do
+		status=$(call POST "/databases/$DB_ID/migrations" "{\"name\":\"perf-$label $i\",\"sql\":\"$sql\"}")
+		if [ "$status" != "201" ]; then
+			echo "Gagal membuat draft $label ke-$i (HTTP $status): $(cat "$BODY")" >&2
+			return 1
+		fi
+		jget id <"$BODY"
+	done
+}
 
 curl -sS -o /dev/null -c "$JAR" -H 'Content-Type: application/json' \
 	-d "{\"username\":\"$ADMIN_USERNAME\",\"password\":\"$ADMIN_PASSWORD\"}" "$BASE_URL/users/login"
 
-DB_ID=$(call GET /databases >/dev/null; jget databases.0.id)
+DB_ID="${DB_ID:-}"
+if [ -z "$DB_ID" ]; then
+	call GET /databases >/dev/null
+	DB_ID=$(jget databases.0.id <"$BODY")
+fi
 if [ -z "$DB_ID" ]; then
 	echo "Tidak ada database yang bisa diakses." >&2
 	exit 2
@@ -51,7 +66,7 @@ trap 'rm -f "$JAR" "$BODY" "$IDS"' EXIT
 for i in $(seq 1 "$SEED"); do
 	status=$(call POST "/databases/$DB_ID/migrations" "{\"name\":\"perf $i\",\"sql\":\"SELECT $i\"}")
 	if [ "$status" = "201" ]; then
-		jget id >>"$IDS"
+		jget id <"$BODY" >>"$IDS"
 	else
 		echo "Gagal membuat draft ke-$i (HTTP $status)" >&2
 		head -c 200 "$BODY" >&2
@@ -72,13 +87,13 @@ if [ "$STATUS" != "202" ]; then
 	echo "Gagal membuat batch (HTTP $STATUS): $(cat "$BODY")" >&2
 	exit 2
 fi
-BATCH_ID=$(jget id)
-TOTAL=$(jget total)
+BATCH_ID=$(jget id <"$BODY")
+TOTAL=$(jget total <"$BODY")
 
 while :; do
 	call GET "/databases/$DB_ID/batches/$BATCH_ID" >/dev/null
-	bstatus=$(jget status)
-	processed=$(jget processed)
+	bstatus=$(jget status <"$BODY")
+	processed=$(jget processed <"$BODY")
 	printf '\r  status=%s %s/%s' "$bstatus" "$processed" "$TOTAL"
 	case "$bstatus" in
 	success | partial | failed | cancelled) break ;;
@@ -94,15 +109,16 @@ python3 -c "raise SystemExit(0 if $RATE >= $MIN_RATE else 1)" ||
 	echo "PERINGATAN: throughput di bawah target $MIN_RATE item/detik"
 
 echo "== Latency cancel =="
-HEAD_IDS=$(head -n 50 "$IDS")
+CANCEL_FILE=$(mktemp)
+seed_drafts 50 "SELECT pg_sleep(0.02)" cancel >"$CANCEL_FILE"
 CANCEL_IDS=$(python3 -c '
 import json, sys
-ids = [line.strip() for line in sys.argv[1:] if line.strip()]
+ids = [line.strip() for line in open(sys.argv[1]) if line.strip()]
 print(json.dumps({"migration_ids": ids}))
-' $HEAD_IDS)
+' "$CANCEL_FILE")
 STATUS=$(call POST "/databases/$DB_ID/batches" "$CANCEL_IDS")
 if [ "$STATUS" = "202" ]; then
-	CB=$(jget id)
+	CB=$(jget id <"$BODY")
 	sleep 0.2
 	C0=$(date +%s%N)
 	call POST "/databases/$DB_ID/batches/$CB/cancel" '{}' >/dev/null
@@ -110,7 +126,7 @@ if [ "$STATUS" = "202" ]; then
 	LAT=$(python3 -c "print(f'{($C1-$C0)/1e6:.0f}')")
 	while :; do
 		call GET "/databases/$DB_ID/batches/$CB" >/dev/null
-		bstatus=$(jget status)
+		bstatus=$(jget status <"$BODY")
 		[ "$bstatus" = "cancelled" ] && break
 		sleep 0.3
 	done
@@ -118,9 +134,12 @@ if [ "$STATUS" = "202" ]; then
 else
 	echo "Lewati uji cancel (HTTP $STATUS)"
 fi
+rm -f "$CANCEL_FILE"
 
 echo "== 20 batch paralel pada database yang sama =="
-PAR_IDS=$(head -n 20 "$IDS" | sed 's/.*/"&"/' | paste -sd, -)
+PAR_FILE=$(mktemp)
+seed_drafts 20 "SELECT pg_sleep(0.1)" par >"$PAR_FILE"
+PAR_IDS=$(sed 's/.*/"&"/' "$PAR_FILE" | paste -sd, -)
 TMP=$(mktemp -d)
 for i in $(seq 1 20); do
 	(
@@ -131,7 +150,7 @@ for i in $(seq 1 20); do
 	) &
 done
 wait
-echo "202: $(grep -l '^202$' "$TMP"/*.code | wc -l | tr -d ' ')  409: $(grep -l '^409$' "$TMP"/*.code | wc -l | tr -d ' ')  lainnya: $(grep -Lv -e '^202$' -e '^409$' "$TMP"/*.code | wc -l | tr -d ' ')"
+echo "202: $(grep -l '^202$' "$TMP"/*.code | wc -l | tr -d ' ')  409: $(grep -l '^409$' "$TMP"/*.code | wc -l | tr -d ' ')  lainnya: $(grep -L -e '^202$' -e '^409$' "$TMP"/*.code | wc -l | tr -d ' ')"
 for f in "$TMP"/*.code; do
 	if [ "$(cat "$f")" = "202" ]; then
 		id=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["id"])' "${f%.code}.body" 2>/dev/null)
@@ -139,3 +158,4 @@ for f in "$TMP"/*.code; do
 	fi
 done
 rm -rf "$TMP"
+rm -f "$PAR_FILE"

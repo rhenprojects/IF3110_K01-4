@@ -52,11 +52,9 @@ export const useUpdateConnection = () =>
     api<Connection>(`/admin/connections/${id}`, { method: "PUT", body: json(v) }));
 export const useDeleteConnection = () => useMut((id: string) => api<void>(`/admin/connections/${id}`, { method: "DELETE" }));
 
-//[test] koneksi belum disimpan: kirim form; sudah disimpan & password kosong: test by id
+//[test] selalu uji isi form; saat edit dengan password kosong backend memakai password tersimpan
 export const useTestConnection = () =>
   useMutation({
     mutationFn: ({ id, input }: { id?: string; input: ConnectionInput }) =>
-      id && !input.password
-        ? api<TestResult>(`/admin/connections/${id}/test`, { method: "POST" })
-        : api<TestResult>("/admin/connections/test", { method: "POST", body: json(input) }),
+      api<TestResult>(id ? `/admin/connections/${id}/test` : "/admin/connections/test", { method: "POST", body: json(input) }),
   });

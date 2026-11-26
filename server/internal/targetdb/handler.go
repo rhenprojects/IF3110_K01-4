@@ -109,7 +109,15 @@ func (h *Handler) TestUnsaved(c *fiber.Ctx) error {
 }
 
 func (h *Handler) TestSaved(c *fiber.Ctx) error {
-	version, err := h.svc.TestSaved(c.UserContext(), c.Params("id"))
+	var in *ConnectionInput
+	if len(c.Body()) > 0 {
+		var body ConnectionInput
+		if err := c.BodyParser(&body); err != nil {
+			return httpx.Error(c, fiber.StatusBadRequest, "Invalid request body")
+		}
+		in = &body
+	}
+	version, err := h.svc.TestSaved(c.UserContext(), c.Params("id"), in)
 	if err != nil {
 		return writeError(c, err)
 	}

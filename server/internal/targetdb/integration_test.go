@@ -186,6 +186,15 @@ func TestIntegrationConnectionLifecycle(t *testing.T) {
 		t.Fatalf("test after update: status %d, body %s", status, raw)
 	}
 
+	// Tes dengan body memakai isi form; password kosong memakai password tersimpan.
+	override := e.validInput("main-renamed")
+	delete(override, "password")
+	override["db_name"] = "tidak_ada_db"
+	status, body, raw = e.do(t, admin, "POST", "/admin/connections/"+id+"/test", override)
+	if status != fiber.StatusBadGateway || body["error"] != targetdb.ErrDatabaseNotFound.Error() {
+		t.Fatalf("test form override: status %d, body %s; want 502 %q", status, raw, targetdb.ErrDatabaseNotFound)
+	}
+
 	pool, err := e.svc.Pool(context.Background(), id)
 	if err != nil {
 		t.Fatalf("Pool: %v", err)

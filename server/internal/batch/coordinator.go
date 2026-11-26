@@ -95,10 +95,12 @@ func (c *Coordinator) Start(b *models.MigrationBatch) error {
 
 func (c *Coordinator) run(ctx context.Context, b *models.MigrationBatch, release func()) {
 	defer release()
-	if err := c.store.MarkRunning(ctx, b.ID, c.now()); err != nil {
+	started := c.now()
+	if err := c.store.MarkRunning(ctx, b.ID, started); err != nil {
 		log.Printf("[batch] mark running %s: %v", b.ID, err)
 		return
 	}
+	b.StartedAt = &started
 
 	var cursor int64
 	processed, failed := 0, 0

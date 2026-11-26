@@ -293,7 +293,7 @@ Aturan input:
 | `PUT /admin/connections/:id` | Ubah. Response `200` + `Connection` |
 | `DELETE /admin/connections/:id` | Hapus. Response `204` (lihat bagian 3.8) |
 | `POST /admin/connections/test` | Tes koneksi dari data form yang **belum disimpan**. Body sama seperti `POST` |
-| `POST /admin/connections/:id/test` | Tes koneksi yang **sudah disimpan** (memakai password tersimpan). Tanpa body |
+| `POST /admin/connections/:id/test` | Tes koneksi yang **sudah disimpan**. Tanpa body: memakai konfigurasi tersimpan. Dengan body (bentuk sama seperti `PUT`): nilai form menimpa konfigurasi tersimpan, dan password kosong memakai password tersimpan |
 
 Response tes berhasil (`200`): `{ "status": "ok", "server_version": "PostgreSQL 16.4 ..." }`
 

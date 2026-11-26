@@ -69,6 +69,31 @@ Yang dilaporkan:
 
 Untuk membandingkan dengan eksekusi manual, jalankan `scripts/benchmark.sh` dan skenario k6 milik Person 2. Fokus batch adalah overhead per item yang konstan, bukan SQL yang lebih cepat.
 
+### 3.1 Uji dataset besar (baseline vs per potongan row)
+
+```bash
+ROWS=1000000 CHUNK=10000 bash scripts/dataset-batch.sh
+```
+
+Script membuat database `dataset_bench` di container `if3110-db`, lalu:
+
+1. Seed tabel `bench_rows` sebanyak `ROWS` row.
+2. Jalankan satu `UPDATE` penuh sebagai baseline; durasi dibaca dari `EXPLAIN (ANALYZE)`.
+3. Reset payload, lalu ulangi operasi yang sama per `CHUNK` row dengan
+   `WHERE id > last_id ORDER BY id LIMIT batch_size`. Tiap potongan punya transaction sendiri, dan checkpoint (`last_id`, `committed_rows`, `chunks`) ditulis di transaction yang sama.
+4. Cetak row, durasi, row/detik, jumlah chunk, dan row yang belum terupdate.
+
+Contoh hasil lokal (1 juta row, chunk 10.000):
+
+| Mode | Rows | Duration | Rows/s |
+|---|---|---|---|
+| baseline | 1.000.000 | 3.170,9 ms | 315.365 |
+| chunked | 1.000.000 | 14.839,0 ms | 67.390 |
+
+Syarat spek: baseline harus **> 1 detik**; kalau belum, naikkan `ROWS` atau `PAYLOAD`. `rows_belum_terupdate` harus `0`.
+
+Catatan: skrip ini mengukur mekanisme potongan row di level database. Perbandingan lewat API/mode batch aplikasi baru bisa dijalankan setelah model batch aplikasi memakai cursor row; saat ini batch aplikasi masih menjalankan banyak migration, bukan potongan row dari satu migration.
+
 ## 4. Uji manual penting
 
 ### 4.1 Checkpoint dan resume setelah crash
