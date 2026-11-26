@@ -317,7 +317,7 @@ Error 502/504 yang sama juga muncul di endpoint viewer dan migration (bagian 8 d
 
 Bagian ini dipakai semua user yang sudah login. Hasilnya dibatasi oleh **akses efektif** user (bagian 3.4).
 
-Untuk user biasa, detail koneksi seperti `host`, `port`, dan `username` **tidak ditampilkan** supaya infrastruktur tidak terbuka. Hanya endpoint admin (bagian 7) yang menampilkannya.
+Untuk user biasa, detail koneksi seperti `host`, `port`, dan `username` **tidak ditampilkan** supaya infrastruktur tidak terbuka. `GET /connections` dan `GET /connections/:id` hanya mengembalikan `id`, `name`, dan `db_name`. Hanya endpoint admin (bagian 7) yang menampilkannya. `POST /connections/:id/test` untuk user biasa selalu memakai konfigurasi tersimpan; override body hanya untuk admin.
 
 Aturan penolakan:
 

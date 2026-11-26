@@ -14,6 +14,13 @@ type Handler struct {
 	svc *Service
 }
 
+// connectionSummary menyembunyikan detail infrastruktur dari user biasa.
+type connectionSummary struct {
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	DBName string `json:"db_name"`
+}
+
 func NewHandler(svc *Service) *Handler {
 	return &Handler{svc: svc}
 }
@@ -156,7 +163,11 @@ func (h *Handler) ListAccessible(c *fiber.Ctx) error {
 	if err != nil {
 		return writeError(c, err)
 	}
-	return c.JSON(models.ConnectionListResponse{Connections: conns})
+	items := make([]connectionSummary, len(conns))
+	for i, conn := range conns {
+		items[i] = connectionSummary{ID: conn.ID, Name: conn.Name, DBName: conn.DBName}
+	}
+	return c.JSON(fiber.Map{"connections": items})
 }
 
 func (h *Handler) GetAccessible(c *fiber.Ctx) error {
@@ -167,7 +178,11 @@ func (h *Handler) GetAccessible(c *fiber.Ctx) error {
 	if !allowed {
 		return writeError(c, ErrNotFound)
 	}
-	return h.Get(c)
+	conn, err := h.svc.Get(c.UserContext(), c.Params("id"))
+	if err != nil {
+		return writeError(c, err)
+	}
+	return c.JSON(connectionSummary{ID: conn.ID, Name: conn.Name, DBName: conn.DBName})
 }
 
 func (h *Handler) TestSavedAccessible(c *fiber.Ctx) error {
@@ -178,5 +193,11 @@ func (h *Handler) TestSavedAccessible(c *fiber.Ctx) error {
 	if !allowed {
 		return writeError(c, ErrNotFound)
 	}
-	return h.TestSaved(c)
+	// User biasa hanya mengetes konfigurasi tersimpan; override host/credential
+	// dari body hanya tersedia untuk admin lewat /admin/connections/:id/test.
+	version, err := h.svc.TestSaved(c.UserContext(), c.Params("id"), nil)
+	if err != nil {
+		return writeError(c, err)
+	}
+	return c.JSON(models.ConnectionTestResponse{Status: "ok", ServerVersion: version})
 }
