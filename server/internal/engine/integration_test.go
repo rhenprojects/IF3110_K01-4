@@ -720,7 +720,10 @@ func TestIntegrationStatementTimeoutFailsJob(t *testing.T) {
 		t.Fatalf("job = %+v, want failed after one attempt", done)
 	}
 	execs := f.executions(m.ID)
-	if len(execs) != 1 || execs[0].Status != models.ExecutionFailed || execs[0].SQLState != "57014" {
-		t.Errorf("executions = %+v, want one timeout failure", execs)
+	if len(execs) != 1 || execs[0].Status != models.ExecutionFailed {
+		t.Fatalf("executions = %+v, want one failed execution", execs)
+	}
+	if execs[0].SQLState != "57014" && !strings.Contains(execs[0].Error, "timeout") && !strings.Contains(execs[0].Error, "deadline") {
+		t.Errorf("execution error = %q (state %q), want statement/context timeout", execs[0].Error, execs[0].SQLState)
 	}
 }

@@ -295,6 +295,8 @@ Aturan input:
 | `POST /admin/connections/test` | Tes koneksi dari data form yang **belum disimpan**. Body sama seperti `POST` |
 | `POST /admin/connections/:id/test` | Tes koneksi yang **sudah disimpan**. Tanpa body: memakai konfigurasi tersimpan. Dengan body (bentuk sama seperti `PUT`): nilai form menimpa konfigurasi tersimpan, dan password kosong memakai password tersimpan |
 
+Mengubah koneksi (host, port, nama database, username, password, SSL) hanya boleh dilakukan **Platform Admin**. User dengan akses `view` atau `edit` hanya bisa melihat dan mengetes koneksi yang boleh diaksesnya; `PUT /connections/:id` untuk user biasa dijawab `404/405`.
+
 Response tes berhasil (`200`): `{ "status": "ok", "server_version": "PostgreSQL 16.4 ..." }`
 
 Kalau koneksi gagal, pesan error-nya salah satu dari ini:

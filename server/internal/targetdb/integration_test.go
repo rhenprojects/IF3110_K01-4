@@ -350,8 +350,8 @@ func TestIntegrationUserConnectionAccess(t *testing.T) {
 		t.Errorf("get accessible: status %d, body %s", status, raw)
 	}
 
-	if status, _, _ = e.doAs(t, user.ID, "PUT", "/connections/"+connectionID, e.validInput("should-fail-"+suffix)); status != fiber.StatusNotFound {
-		t.Errorf("update with view level: status %d, want 404", status)
+	if status, _, _ = e.doAs(t, user.ID, "PUT", "/connections/"+connectionID, e.validInput("should-fail-"+suffix)); status != fiber.StatusNotFound && status != fiber.StatusMethodNotAllowed {
+		t.Errorf("update with view level: status %d, want 404/405", status)
 	}
 
 	if err := e.db.Model(&models.GroupDatabaseAccess{}).
@@ -360,8 +360,8 @@ func TestIntegrationUserConnectionAccess(t *testing.T) {
 		t.Fatalf("grant edit: %v", err)
 	}
 
-	if status, body, raw = e.doAs(t, user.ID, "PUT", "/connections/"+connectionID, e.validInput("renamed-"+suffix)); status != fiber.StatusOK || body["name"] != "renamed-"+suffix {
-		t.Errorf("update with edit level: status %d, body %s", status, raw)
+	if status, _, raw = e.doAs(t, user.ID, "PUT", "/connections/"+connectionID, e.validInput("renamed-"+suffix)); status != fiber.StatusNotFound && status != fiber.StatusMethodNotAllowed {
+		t.Errorf("update with edit level: status %d, want 404/405; body %s", status, raw)
 	}
 	if status, _, raw = e.doAs(t, user.ID, "POST", "/connections/"+connectionID+"/test", nil); status != fiber.StatusOK {
 		t.Errorf("test accessible connection: status %d, body %s", status, raw)

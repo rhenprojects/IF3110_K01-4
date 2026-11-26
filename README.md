@@ -71,13 +71,14 @@ Menghentikan: `docker compose -f deploy/docker-compose.yml down`. Menghapus juga
 Platform butuh database target untuk dikelola. Contoh membuat database `toko_demo` di container yang sama:
 
 ```sh
-docker exec if3110-db psql -U postgres -c "CREATE DATABASE toko_demo"
-docker exec if3110-db psql -U postgres -d toko_demo -c "CREATE TABLE customers (id serial PRIMARY KEY, email varchar(120) NOT NULL UNIQUE, name text); INSERT INTO customers (email, name) VALUES ('ana@mail.com', 'Ana'), ('budi@mail.com', 'Budi');"
+docker exec if3110-db psql -U postgres -c "CREATE ROLE toko_app LOGIN PASSWORD 'toko_app'"
+docker exec if3110-db psql -U postgres -c "CREATE DATABASE toko_demo OWNER toko_app"
+docker exec if3110-db psql -U toko_app -d toko_demo -c "CREATE TABLE customers (id serial PRIMARY KEY, email varchar(120) NOT NULL UNIQUE, name text); INSERT INTO customers (email, name) VALUES ('ana@mail.com', 'Ana'), ('budi@mail.com', 'Budi');"
 ```
 
 Lalu di aplikasi (sebagai admin):
 
-1. **Connections** → tambah koneksi: host **`db`** (nama service Docker, bukan `localhost`), port `5432`, database `toko_demo`, user `postgres`, password `postgres`, SSL `disable`.
+1. **Connections** → tambah koneksi: host **`db`** (nama service Docker, bukan `localhost`), port `5432`, database `toko_demo`, user `toko_app`, password `toko_app`, SSL `disable`. Jangan pakai user `postgres`/superuser untuk koneksi target.
 2. **Users** → buat user, misalnya `budi` dan `siti`.
 3. **Groups** → buat group, masukkan anggota, beri akses ke `toko_demo` (`edit` untuk `budi`, `view` untuk `siti`), lalu edit group untuk memilih **Team Leader** dari anggotanya. Setiap group yang punya akses wajib punya leader.
 4. Login sebagai `budi` untuk melihat schema/data, membuat migration, dan mengajukan review. Login sebagai leader di halaman **Review** untuk menyetujui; setelah semua leader setuju, migration masuk queue dan dijalankan worker. Login sebagai `siti` untuk melihat bahwa View Only hanya bisa melihat.

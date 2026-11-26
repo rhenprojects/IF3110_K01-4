@@ -95,6 +95,10 @@ func (e *Engine) execute(ctx context.Context, spec attemptSpec) (_ *models.Migra
 		res.status = models.ExecutionFailed
 		res.errMsg = err.Error()
 		res.sqlState, res.transient = classify(err)
+		// Batas waktu eksekusi SQL adalah keputusan final, bukan gangguan sementara.
+		if errors.Is(err, context.DeadlineExceeded) {
+			res.transient = false
+		}
 		span.SetAttributes(attribute.String("execution.phase", phase), attribute.String("db.response.status_code", res.sqlState),
 			attribute.Bool("error.transient", res.transient))
 		logger.WarnContext(ctx, "migration attempt failed", "event", "sql.failed", "phase", phase,

@@ -38,7 +38,6 @@ func (h *Handler) RegisterUserRoutes(router fiber.Router) {
 
 	g.Get("/", h.ListAccessible)
 	g.Get("/:id", h.GetAccessible)
-	g.Put("/:id", h.UpdateAccessible)
 	g.Post("/:id/test", h.TestSavedAccessible)
 }
 
@@ -169,17 +168,6 @@ func (h *Handler) GetAccessible(c *fiber.Ctx) error {
 		return writeError(c, ErrNotFound)
 	}
 	return h.Get(c)
-}
-
-func (h *Handler) UpdateAccessible(c *fiber.Ctx) error {
-	allowed, err := h.svc.CanEdit(c.UserContext(), authctx.UserID(c), c.Params("id"))
-	if err != nil {
-		return writeError(c, err)
-	}
-	if !allowed {
-		return writeError(c, ErrNotFound)
-	}
-	return h.Update(c)
 }
 
 func (h *Handler) TestSavedAccessible(c *fiber.Ctx) error {

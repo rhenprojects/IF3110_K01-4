@@ -37,7 +37,7 @@ sh scripts/invoker.sh test-all    # unit + integration + API smoke
 | 16 | Assign group ke database dan level akses `view`/`edit` | `TestIntegrationGroupAccessAndAuthorization`, `TestIntegrationLevelMatrix` | PASS |
 | 17 | Effective access gabungan beberapa group (edit menang) dan pencabutan akses | `TestIntegrationLevelMatrix`, `TestIntegrationUserConnectionAccess` | PASS |
 | 18 | Enforcement View Only: user hanya bisa melihat dan test koneksi, update ditolak | `TestIntegrationUserConnectionAccess`, API smoke test | PASS |
-| 19 | Enforcement View + Edit: user bisa update koneksi | `TestIntegrationUserConnectionAccess`, API smoke test | PASS |
+| 19 | Update koneksi (host/port/database/user/password/SSL) hanya Platform Admin; user View + Edit tetap ditolak (404/405) | `TestIntegrationUserConnectionAccess`, API smoke test | PASS |
 | 20 | Unit dan integration test tersedia dan dapat dijalankan terpisah | `scripts/invoker.sh test-db` | PASS |
 | 21 | Viewer schema: schema, table/view, column (tipe, nullable, default, PK), constraint, index; read-only + statement timeout; schema sistem disembunyikan | `TestIntegrationSchema`, `TestIntegrationViewerAccessControl`, `TestTranslateTargetError` | PASS |
 | 22 | Viewer data: paging limit/offset + total, urut primary key, NULL/numeric/uuid, nama tabel dengan spasi, nama tabel injection ditolak, target tidak terjangkau | `TestIntegrationRows`, `TestIntegrationRowsRejectsUnknownAndInjectedTables`, `TestIntegrationUnreachableTarget`, `TestBuildRowsQueryQuotesIdentifiers`, `TestJSONValue` | PASS |
