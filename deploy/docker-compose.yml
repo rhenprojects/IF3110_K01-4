@@ -17,6 +17,8 @@ services:
       ADMIN_PASSWORD: "admin-password"
       SESSION_HASH_KEY: "hash-key-0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
       SESSION_BLOCK_KEY: "0123456789abcdef0123456789abcdef"
+      WORKER_COUNT: "2"
+      MIGRATION_TIMEOUT_SECONDS: "300"
       DB_ENC_KEY: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
     depends_on:
       db:

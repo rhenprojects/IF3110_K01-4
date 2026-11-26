@@ -34,6 +34,8 @@ Klik **Test koneksi** sampai muncul `Terhubung: PostgreSQL ...`, lalu **Simpan**
 
 Beri akses level `edit` ke database tersebut lewat **Admin → Groups**, lalu login sebagai anggota group itu untuk membuat migration dan batch. Kalau database target berbeda, ganti `duren_database` pada perintah `psql` di bawah dengan `Nama database` koneksimu.
 
+Untuk menjalankan batch, user tersebut juga harus menjadi **Team Leader** dari setiap group yang punya akses ke database itu; kalau tidak, batch ditolak `403`.
+
 ## 10 Migration
 
 | # | Nama | SQL up | SQL down |

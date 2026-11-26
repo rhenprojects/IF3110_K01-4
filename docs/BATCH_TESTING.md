@@ -22,6 +22,8 @@ docker compose -f deploy/docker-compose.yml exec db createdb -U postgres target_
 
 Seed admin, koneksi, group, dan akses lewat UI atau API admin. Untuk script otomatis, minimal ada satu user admin dan satu database dengan level akses `edit`.
 
+Pembuat batch harus menjadi **Team Leader dari setiap group yang punya akses** ke database uji. Tanpa itu, `POST /batches` ditolak `403`.
+
 Variabel yang dipakai semua script:
 
 | Variabel | Default | Keterangan |
@@ -171,5 +173,6 @@ Keduanya memakai self-signed certificate; browser akan menampilkan peringatan sa
 ## 7. Batasan yang diketahui
 
 - Lock eksekusi masih `sync.Map` di dalam proses (milik Person 1). Dengan lebih dari satu instance backend, dua instance bisa menjalankan migration berbeda pada database target yang sama. Jangan scale backend lebih dari satu replika sampai lock dipindah ke database.
+- Batch masih dijalankan langsung oleh proses API setelah pembuatnya terbukti leader semua group yang punya akses. Batch belum dipublikasikan sebagai job queue; pemindahan ke change request + queue adalah pekerjaan lanjutan.
 - AutoMigrate membuat primary key item sebagai `bigserial`, bukan `GENERATED ALWAYS AS IDENTITY`. Perilaku fungsional sama; kolom identitas bisa dirapikan lewat migration manual bila diperlukan.
 - Pembatalan tidak membalik DDL yang sudah commit. `compensation_status` hanya menandai bahwa item selesai sebelum pembatalan dan tidak dikompensasi.

@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 	"web_backend/internal/api"
 	databasehandler "web_backend/internal/database_handler"
 	"web_backend/internal/engine"
@@ -43,6 +44,11 @@ func main() {
 		log.Printf("[WARN] Gagal terhubung ke database: %v (Menjalankan server tanpa database)", err)
 		db = nil
 	} else {
+		if sqlDB, dbErr := db.DB(); dbErr == nil {
+			sqlDB.SetMaxOpenConns(envInt("DB_MAX_OPEN_CONNS", 20))
+			sqlDB.SetMaxIdleConns(envInt("DB_MAX_IDLE_CONNS", 10))
+			sqlDB.SetConnMaxLifetime(time.Duration(envInt("DB_CONN_MAX_LIFETIME_MINUTES", 30)) * time.Minute)
+		}
 		if err := models.Migrate(db); err != nil {
 			log.Printf("[WARN] Gagal melakukan migrasi database: %v", err)
 		}
@@ -72,7 +78,9 @@ func main() {
 	var eng *engine.Engine
 	if db != nil {
 		connService = targetdb.NewService(db, connCipher, targetdb.NewPoolManager())
-		eng, err = engine.New(db, connService, engine.Options{})
+		eng, err = engine.New(db, connService, engine.Options{
+			StatementTimeout: time.Duration(envInt("MIGRATION_TIMEOUT_SECONDS", 300)) * time.Second,
+		})
 		if err != nil {
 			log.Fatalf("Gagal membuat migration engine: %v", err)
 		}
@@ -125,7 +133,12 @@ func main() {
 	}
 	sessionService.SecureCookies = secureCookies
 
-	app := fiber.New()
+	app := fiber.New(fiber.Config{
+		BodyLimit:    envInt("HTTP_BODY_LIMIT_BYTES", 1<<20),
+		ReadTimeout:  time.Duration(envInt("HTTP_READ_TIMEOUT_SECONDS", 15)) * time.Second,
+		WriteTimeout: time.Duration(envInt("HTTP_WRITE_TIMEOUT_SECONDS", 30)) * time.Second,
+		IdleTimeout:  time.Duration(envInt("HTTP_IDLE_TIMEOUT_SECONDS", 60)) * time.Second,
+	})
 	app.Use(telemetry.Middleware(logger))
 	app.Use(fiberRecover.New())
 	api.SetupRoutes(app, db, connService, devAuth, sessionService, eng)

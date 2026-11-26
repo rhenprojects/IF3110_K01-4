@@ -700,3 +700,27 @@ func TestIntegrationTraceFollowsJobFromRequestToWorker(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+func TestIntegrationStatementTimeoutFailsJob(t *testing.T) {
+	f := setup(t)
+	eng, err := engine.New(f.db, f.pools, engine.Options{
+		StatementTimeout: 100 * time.Millisecond,
+		PollEvery:        20 * time.Millisecond, BackoffBase: 20 * time.Millisecond, BackoffMax: 100 * time.Millisecond,
+		HeartbeatEvery: 100 * time.Millisecond, StaleAfter: time.Second,
+		Logger: slog.New(slog.NewJSONHandler(io.Discard, nil)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(eng.Start(1))
+
+	m := f.migration(f.connID, "slow query", `SELECT pg_sleep(1)`, `SELECT 1`)
+	done := f.waitJob(f.enqueue(eng, f.connID, m.ID, models.JobKindUp, "").ID)
+	if done.Status != models.JobFailed || done.Attempts != 1 {
+		t.Fatalf("job = %+v, want failed after one attempt", done)
+	}
+	execs := f.executions(m.ID)
+	if len(execs) != 1 || execs[0].Status != models.ExecutionFailed || execs[0].SQLState != "57014" {
+		t.Errorf("executions = %+v, want one timeout failure", execs)
+	}
+}

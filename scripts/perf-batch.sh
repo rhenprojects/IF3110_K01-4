@@ -2,6 +2,7 @@
 # Throughput and cancellation test for batch migrations.
 # Seeds draft migrations through the public API, runs one batch and reports
 # processed items per second, then checks cancellation latency.
+# Pembuat batch harus leader dari semua group yang punya akses ke database uji.
 # Usage: SEED=300 ./scripts/perf-batch.sh
 set -uo pipefail
 

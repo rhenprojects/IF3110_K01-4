@@ -18,6 +18,7 @@ import (
 var benchRawBody = []byte(`{"status":"ok"}`)
 
 func SetupRoutes(app *fiber.App, db *gorm.DB, connService *targetdb.Service, devAuth bool, sessions *userhandler.SessionService, eng *engine.Engine) {
+	app.Use(middleware.SecurityHeaders)
 	api := app.Group("/api/v1")
 
 	// Route publik (health, echo, login) harus didaftarkan sebelum grup

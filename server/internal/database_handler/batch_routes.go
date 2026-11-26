@@ -32,6 +32,11 @@ func (h *Handler) CreateBatch(c *fiber.Ctx) error {
 	if err != nil {
 		return h.writeError(c, err)
 	}
+	// shortcut: batch hanya boleh dijalankan oleh leader semua group yang punya
+	// akses; pemindahan batch ke change request + queue belum diimplementasikan.
+	if err := h.requireBatchLeader(c, conn.ID); err != nil {
+		return httpx.Error(c, fiber.StatusForbidden, err.Error())
+	}
 	var req struct {
 		MigrationIDs []string `json:"migration_ids"`
 	}
@@ -189,6 +194,28 @@ func (h *Handler) attachBatchNames(c *fiber.Ctx, batches []*models.MigrationBatc
 		if b.CancelledBy != nil {
 			name := names[*b.CancelledBy]
 			b.CancelledByName = &name
+		}
+	}
+	return nil
+}
+
+func (h *Handler) requireBatchLeader(c *fiber.Ctx, connectionID string) error {
+	var rows []struct {
+		LeaderID *string
+	}
+	if err := h.db.WithContext(c.UserContext()).Table("groups").
+		Select("groups.leader_id AS leader_id").
+		Joins("JOIN group_database_access ON group_database_access.group_id = groups.id").
+		Where("group_database_access.connection_id = ?", connectionID).
+		Scan(&rows).Error; err != nil {
+		return err
+	}
+	if len(rows) == 0 {
+		return errors.New("only a group leader can run a batch")
+	}
+	for _, row := range rows {
+		if row.LeaderID == nil || *row.LeaderID != authctx.UserID(c) {
+			return errors.New("only a group leader can run a batch; every group with access must have you as its leader")
 		}
 	}
 	return nil

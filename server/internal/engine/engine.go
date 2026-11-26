@@ -23,13 +23,14 @@ type PoolProvider interface {
 }
 
 type Options struct {
-	MaxAttempts    int           // attempt maksimum per job, termasuk yang pertama
-	BackoffBase    time.Duration // jeda retry pertama, lalu berlipat dua
-	BackoffMax     time.Duration
-	PollEvery      time.Duration // interval worker memeriksa queue
-	HeartbeatEvery time.Duration
-	StaleAfter     time.Duration // job running tanpa heartbeat selama ini dianggap terhenti
-	Logger         *slog.Logger
+	MaxAttempts      int           // attempt maksimum per job, termasuk yang pertama
+	BackoffBase      time.Duration // jeda retry pertama, lalu berlipat dua
+	BackoffMax       time.Duration
+	PollEvery        time.Duration // interval worker memeriksa queue
+	HeartbeatEvery   time.Duration
+	StaleAfter       time.Duration // job running tanpa heartbeat selama ini dianggap terhenti
+	StatementTimeout time.Duration // batas eksekusi SQL migration di database target
+	Logger           *slog.Logger
 }
 
 func (o Options) withDefaults() Options {
@@ -50,6 +51,9 @@ func (o Options) withDefaults() Options {
 	}
 	if o.StaleAfter <= 0 {
 		o.StaleAfter = 30 * time.Second
+	}
+	if o.StatementTimeout <= 0 {
+		o.StatementTimeout = 5 * time.Minute
 	}
 	if o.Logger == nil {
 		o.Logger = slog.Default()

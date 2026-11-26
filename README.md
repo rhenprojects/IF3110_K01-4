@@ -124,6 +124,10 @@ Buka http://localhost:5173. Permintaan `/api` diteruskan ke `localhost:9000` ole
 | `APP_ENV=production` atau `COOKIE_SECURE=true` | production | Mengaktifkan atribut `Secure` pada cookie (wajib untuk HTTPS) |
 | `PORT` | tidak | Port backend, default `9000` |
 | `WORKER_COUNT` | tidak | Jumlah worker migration, default `2` |
+| `MIGRATION_TIMEOUT_SECONDS` | tidak | Batas eksekusi satu migration di database target, default `300` detik |
+| `HTTP_READ_TIMEOUT_SECONDS`, `HTTP_WRITE_TIMEOUT_SECONDS`, `HTTP_IDLE_TIMEOUT_SECONDS` | tidak | Timeout HTTP, default `15`/`30`/`60` detik |
+| `HTTP_BODY_LIMIT_BYTES` | tidak | Batas body request, default `1048576` (1 MB) |
+| `DB_MAX_OPEN_CONNS`, `DB_MAX_IDLE_CONNS`, `DB_CONN_MAX_LIFETIME_MINUTES` | tidak | Batas pool database platform, default `20`/`10`/`30` menit |
 | `DEV_AUTH=true` | **jangan di production** | Hanya untuk development/test: identitas diambil dari header `X-Debug-User` |
 
 Nilai di `deploy/docker-compose.yml` dan `scripts/invoker.sh` hanya untuk development dan pengujian.

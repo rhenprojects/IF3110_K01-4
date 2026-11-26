@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 	"web_backend/internal/models"
@@ -124,7 +125,19 @@ func (e *Engine) execute(ctx context.Context, spec attemptSpec) (_ *models.Migra
 	if err != nil {
 		return fail(err, "begin")
 	}
-	queryCtx, querySpan := tracer.Start(ctx, "db.query", trace.WithSpanKind(trace.SpanKindClient),
+	if e.opts.StatementTimeout > 0 {
+		if _, err := tx.Exec(ctx, fmt.Sprintf("SET LOCAL statement_timeout = %d", e.opts.StatementTimeout.Milliseconds())); err != nil {
+			_ = tx.Rollback(context.Background())
+			return fail(err, "timeout")
+		}
+	}
+	queryCtx := ctx
+	if e.opts.StatementTimeout > 0 {
+		var cancel context.CancelFunc
+		queryCtx, cancel = context.WithTimeout(ctx, e.opts.StatementTimeout)
+		defer cancel()
+	}
+	queryCtx, querySpan := tracer.Start(queryCtx, "db.query", trace.WithSpanKind(trace.SpanKindClient),
 		trace.WithAttributes(attribute.String("db.system.name", "postgresql"), attribute.String("db.query.text", queryText(res.sql))))
 	_, err = tx.Exec(queryCtx, res.sql)
 	endSpan(querySpan, err)

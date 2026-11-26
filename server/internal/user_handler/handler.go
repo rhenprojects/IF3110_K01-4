@@ -3,6 +3,8 @@ package userhandler
 import (
 	"errors"
 	"log"
+	"strconv"
+	"strings"
 	"web_backend/internal/authctx"
 	"web_backend/internal/httpx"
 	"web_backend/internal/models"
@@ -12,12 +14,16 @@ import (
 )
 
 type UserHandler struct {
-	DB       *gorm.DB
-	Sessions *SessionService
+	DB           *gorm.DB
+	Sessions     *SessionService
+	loginLimiter *loginLimiter
 }
 
 func NewUserHandler(db *gorm.DB, sessions *SessionService) *UserHandler {
-	return &UserHandler{DB: db, Sessions: sessions}
+	return &UserHandler{
+		DB: db, Sessions: sessions,
+		loginLimiter: newLoginLimiter(defaultLoginMaxFailures, defaultLoginWindow),
+	}
 }
 
 func (h *UserHandler) requireDB(c *fiber.Ctx) error {
@@ -47,15 +53,23 @@ func (h *UserHandler) Login(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return httpx.Error(c, fiber.StatusBadRequest, "Invalid request body")
 	}
+	username := strings.TrimSpace(req.Username)
+	limitKey := strings.ToLower(username) + "|" + c.IP()
+	if allowed, retry := h.loginLimiter.allow(limitKey); !allowed {
+		c.Set(fiber.HeaderRetryAfter, strconv.Itoa(int(retry.Seconds())+1))
+		return httpx.Error(c, fiber.StatusTooManyRequests, "too many failed login attempts, try again later")
+	}
 
 	var user models.User
-	if err := h.DB.Where("username = ?", req.Username).First(&user).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+	if err := h.DB.Where("username = ?", username).First(&user).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		log.Printf("[user] login lookup failed: %v", err)
 		return httpx.Error(c, fiber.StatusInternalServerError, "Internal server error")
 	}
 	if !CheckPassword(user.Password, req.Password) {
+		h.loginLimiter.fail(limitKey)
 		return httpx.Error(c, fiber.StatusUnauthorized, "Invalid username or password")
 	}
+	h.loginLimiter.reset(limitKey)
 
 	if _, _, err := h.Sessions.Create(c, user.ID); err != nil {
 		log.Printf("[user] create session failed: %v", err)
