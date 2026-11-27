@@ -14,6 +14,7 @@ import (
 	"web_backend/internal/engine"
 	"web_backend/internal/models"
 	"web_backend/internal/observability"
+	"web_backend/internal/review"
 	"web_backend/internal/targetdb"
 	"web_backend/internal/telemetry"
 	userhandler "web_backend/internal/user_handler"
@@ -83,6 +84,7 @@ func main() {
 		eng, err = engine.New(db, connService, engine.Options{
 			StatementTimeout:    time.Duration(envInt("MIGRATION_TIMEOUT_SECONDS", 300)) * time.Second,
 			DenySuperuserTarget: production || os.Getenv("DENY_SUPERUSER_TARGET") == "true",
+			Revalidate:          review.StillValid,
 		})
 		if err != nil {
 			log.Fatalf("Gagal membuat migration engine: %v", err)
