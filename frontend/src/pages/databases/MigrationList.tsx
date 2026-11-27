@@ -36,7 +36,7 @@ export default function MigrationList() {
           hint={editable ? "Buat migration pertama untuk mengubah struktur database ini." : "Belum ada perubahan yang tercatat."} action={add} />
       )}
       {q.data && q.data.length > 0 && (
-        <Table columns={["Versi", "Nama", "Status", "Dibuat oleh", "Dijalankan", "Durasi"]}>
+        <Table columns={["Versi", "Nama", "Status", "Dibuat oleh", "Dijalankan", "Durasi", ...(editable ? ["Aksi"] : [])]}>
           {q.data.map((m) => (
             <tr key={m.id}>
               <td className={`${td} font-mono`}>{m.version ? `v${m.version}` : "—"}</td>
@@ -47,6 +47,13 @@ export default function MigrationList() {
                 {m.executed_at ? <>{m.executed_by_name}<span className="block text-xs text-slate-400">{fmtDate(m.executed_at)}</span></> : "—"}
               </td>
               <td className={td}>{fmtDuration(m.duration_ms)}</td>
+              {editable && (
+                <td className={`${td} whitespace-nowrap`}>
+                  {m.status === "draft"
+                    ? <Link to={`/databases/${db.id}/migrations/${m.id}/edit`} className="font-medium text-primary underline-offset-2 hover:underline">Edit</Link>
+                    : <span className="text-slate-400">—</span>}
+                </td>
+              )}
             </tr>
           ))}
         </Table>
