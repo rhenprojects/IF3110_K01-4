@@ -37,7 +37,7 @@ func upgradeMigrationStatus(db *gorm.DB) error {
 	if err != nil {
 		return err
 	}
-	if strings.Contains(def, "pending_review") {
+	if strings.Contains(def, "pending_review") && strings.Contains(def, "partial") {
 		return nil
 	}
 	return db.Transaction(func(tx *gorm.DB) error {
@@ -45,7 +45,7 @@ func upgradeMigrationStatus(db *gorm.DB) error {
 			`ALTER TABLE migrations ALTER COLUMN status TYPE varchar(20)`,
 			`ALTER TABLE migrations DROP CONSTRAINT IF EXISTS chk_migrations_status`,
 			`ALTER TABLE migrations ADD CONSTRAINT chk_migrations_status
-				CHECK (status IN ('draft','pending_review','approved','success','failed'))`,
+				CHECK (status IN ('draft','pending_review','approved','success','failed','partial'))`,
 		} {
 			if err := tx.Exec(stmt).Error; err != nil {
 				return err

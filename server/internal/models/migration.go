@@ -13,6 +13,7 @@ const (
 	MigrationApproved      MigrationStatus = "approved"
 	MigrationSuccess       MigrationStatus = "success"
 	MigrationFailed        MigrationStatus = "failed"
+	MigrationPartial       MigrationStatus = "partial"
 )
 
 // Migration adalah satu perubahan SQL pada database target. Version diisi saat
@@ -23,7 +24,7 @@ type Migration struct {
 	Version      *int            `json:"version" gorm:"column:version;type:bigint;index:idx_migrations_connection_version,unique,where:version IS NOT NULL"`
 	Name         string          `json:"name" gorm:"column:name;type:varchar(200);not null"`
 	SQL          string          `json:"sql" gorm:"column:sql;type:text;not null"`
-	Status       MigrationStatus `json:"status" gorm:"column:status;type:varchar(20);not null;default:'draft';check:chk_migrations_status,status IN ('draft','pending_review','approved','success','failed')"`
+	Status       MigrationStatus `json:"status" gorm:"column:status;type:varchar(20);not null;default:'draft';check:chk_migrations_status,status IN ('draft','pending_review','approved','success','failed','partial')"`
 	Error        string          `json:"error" gorm:"column:error;type:text;not null;default:''"`
 	CreatedBy    string          `json:"created_by" gorm:"column:created_by;type:varchar(64);not null"`
 	ExecutedBy   *string         `json:"executed_by" gorm:"column:executed_by;type:varchar(64)"`
@@ -36,6 +37,14 @@ type Migration struct {
 	Irreversible       bool   `json:"irreversible" gorm:"column:irreversible;not null;default:false"`
 	IrreversibleReason string `json:"irreversible_reason" gorm:"column:irreversible_reason;type:text;not null;default:''"`
 	Revision           int    `json:"revision" gorm:"column:revision;not null;default:1"`
+
+	BatchSize            int     `json:"batch_size" gorm:"column:batch_size;not null;default:0"`
+	BatchRunID           *string `json:"batch_run_id,omitempty" gorm:"column:batch_run_id;type:uuid"`
+	BatchStatus          string  `json:"batch_status" gorm:"column:batch_status;type:varchar(20);not null;default:''"`
+	BatchCursor          int64   `json:"batch_cursor" gorm:"column:batch_cursor;not null;default:0"`
+	BatchRows            int64   `json:"batch_rows" gorm:"column:batch_rows;not null;default:0"`
+	BatchChunks          int64   `json:"batch_chunks" gorm:"column:batch_chunks;not null;default:0"`
+	BatchCancelRequested bool    `json:"batch_cancel_requested" gorm:"column:batch_cancel_requested;not null;default:false"`
 
 	CreatedByName  string  `json:"created_by_name" gorm:"-"`
 	ExecutedByName *string `json:"executed_by_name" gorm:"-"`

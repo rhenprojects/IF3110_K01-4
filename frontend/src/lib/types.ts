@@ -77,7 +77,7 @@ export type RowsResponse = {
 };
 
 //[migration] docs/api-contract.md bagian 9
-export type MigrationStatus = "draft" | "pending_review" | "approved" | "success" | "failed";
+export type MigrationStatus = "draft" | "pending_review" | "approved" | "success" | "failed" | "partial";
 export type Migration = {
   id: string;
   connection_id: string;
@@ -89,6 +89,13 @@ export type Migration = {
   irreversible_reason: string;
   revision: number; //[migration] naik setiap draft diubah
   status: MigrationStatus;
+  batch_size: number;
+  batch_run_id?: string | null;
+  batch_status: string;
+  batch_cursor: number;
+  batch_rows: number;
+  batch_chunks: number;
+  batch_cancel_requested: boolean;
   error: string;
   created_by: string;
   created_by_name: string;
@@ -99,7 +106,7 @@ export type Migration = {
   executed_at: string | null;
   duration_ms: number | null;
 };
-export type MigrationInput = { name: string; sql: string; sql_down?: string; irreversible?: boolean; irreversible_reason?: string };
+export type MigrationInput = { name: string; sql: string; sql_down?: string; irreversible?: boolean; irreversible_reason?: string; batch_size?: number };
 
 //[review] pengajuan perubahan (up / rollback / forward) yang harus disetujui Team Leader tiap group
 export type ChangeRequestStatus = "pending_review" | "approved" | "rejected";

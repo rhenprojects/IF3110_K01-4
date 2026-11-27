@@ -26,7 +26,6 @@ export default function DatabaseLayout() {
         <NavLink to="migrations" end className={tab}>Migrations</NavLink>
         <NavLink to="history" className={tab}>Riwayat eksekusi</NavLink>
         <NavLink to="queue" className={tab}>Queue</NavLink>
-        <NavLink to="migrations/batches" className={tab}>Batch</NavLink>
       </nav>
       <Outlet context={db} />
     </div>

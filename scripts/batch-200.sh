@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# DEPRECATED: mode batch multi-migration sudah dinonaktifkan.
 # Seed COUNT draft migrations and execute them as one batch.
 #
 # Default: 200 migrations with SQL "SELECT <n>". No schema is changed, so this
@@ -12,6 +13,8 @@
 #   COUNT=200 DB_ID=<uuid> bash scripts/batch-200.sh
 #   BASE_URL=http://localhost:9000/api/v1 ADMIN_PASSWORD=secret bash scripts/batch-200.sh
 set -euo pipefail
+echo "Script mode batch lama dinonaktifkan. Gunakan scripts/chunked-batch.sh." >&2
+exit 2
 
 BASE_URL="${BASE_URL:-http://localhost:9000/api/v1}"
 ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"

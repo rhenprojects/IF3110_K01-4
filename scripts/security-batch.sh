@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+if [ "${LEGACY_BATCH:-}" != "1" ]; then
+	echo "Script ini menguji endpoint batch multi-migration yang sudah dinonaktifkan (410). Set LEGACY_BATCH=1 hanya untuk arsip." >&2
+	exit 2
+fi
 # Security smoke test for the batch migration API.
 # Usage: BASE_URL=http://localhost:9000/api/v1 ADMIN_PASSWORD=... ./scripts/security-batch.sh
 set -uo pipefail

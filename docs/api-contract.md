@@ -145,10 +145,11 @@ Artinya admin yang ingin melihat atau mengubah suatu database harus menjadikan d
 ### 3.7 Aturan migration
 
 - **Satu riwayat linear per database.** Versi hanya diberikan ke migration yang **berhasil**, urut `1, 2, 3, ...` tanpa lompatan.
-- Migration punya 3 status:
+- Migration punya status:
   - `draft`: baru disimpan, belum dijalankan. Boleh diedit.
   - `success`: sudah dijalankan dan di-commit. Punya nomor versi. Tidak boleh diubah.
-  - `failed`: dijalankan tapi gagal dan di-rollback. Tidak punya versi. Tidak boleh dijalankan ulang. Kalau mau mencoba lagi, buat migration baru (SQL-nya bisa disalin dari yang gagal).
+  - `failed`: dijalankan tapi gagal dan di-rollback. Tidak punya versi.
+  - `partial`: batch berhenti/gagal di tengah; sebagian potongan sudah committed. Bisa dilanjutkan dari checkpoint atau dibatalkan/revert.
 - Saat dijalankan, seluruh SQL berjalan dalam **satu transaction**: semua berhasil maka `COMMIT`, ada satu yang gagal maka `ROLLBACK`.
 - Dalam satu database, **hanya satu migration yang boleh berjalan pada satu waktu**. Kalau ada yang sedang berjalan, jawab `409`.
 - Riwayat migration **tidak bisa dihapus**.
@@ -422,14 +423,22 @@ Bentuk data `Migration`:
   "created_at": "…",
   "updated_at": "…",
   "executed_at": "…",
-  "duration_ms": 42
+  "duration_ms": 42,
+  "batch_size": 0,
+  "batch_run_id": null,
+  "batch_status": "",
+  "batch_cursor": 0,
+  "batch_rows": 0,
+  "batch_chunks": 0,
+  "batch_cancel_requested": false
 }
 ```
 
 Catatan field:
 
-- `version`, `executed_by`, `executed_by_name`, `executed_at`, `duration_ms` bernilai `null` untuk migration `draft` (dan `version` juga `null` untuk `failed`).
-- `error` berisi pesan dari Postgres kalau `status` adalah `failed`.
+- `version`, `executed_by`, `executed_by_name`, `executed_at`, `duration_ms` bernilai `null` untuk migration `draft` (dan `version` juga `null` untuk `failed`/`partial`).
+- `error` berisi pesan dari Postgres kalau `status` adalah `failed` atau `partial`.
+- `batch_*` hanya berarti jika `batch_size > 0`. `batch_status`: `running`, `success`, `reverted`, `partially_reverted`, atau kosong.
 - `created_by_name` dan `executed_by_name` ditambahkan oleh backend supaya user biasa bisa melihat nama pelaksana tanpa memanggil endpoint admin.
 
 Izin:
@@ -441,10 +450,27 @@ Izin:
 |---|---|
 | `GET /databases/:id/migrations` | Riwayat. Response `{ "migrations": [Migration, ...] }`, urut dari yang terbaru dibuat. Isinya semua status |
 | `GET /databases/:id/migrations/:mid` | Detail satu migration |
-| `POST /databases/:id/migrations` | Buat draft. Body `{ "name": "…", "sql": "…" }`. Response `201` + `Migration` berstatus `draft` |
-| `PUT /databases/:id/migrations/:mid` | Ubah draft. Body `{ "name": "…", "sql": "…" }`. Response `200`. `409` kalau statusnya bukan `draft` |
+| `POST /databases/:id/migrations` | Buat draft. Body `{ "name": "…", "sql": "…", "sql_down": "…", "batch_size": 0 }`. Response `201` + `Migration` berstatus `draft` |
+| `PUT /databases/:id/migrations/:mid` | Ubah draft. Body sama seperti `POST`. Response `200`. `409` kalau statusnya bukan `draft` |
+| `POST /databases/:id/migrations/:mid/batch/cancel` | Minta worker berhenti di batas potongan lalu menjalankan SQL down terbalik. Response `202`; `400` kalau bukan batch |
+| `POST /databases/:id/migrations/:mid/batch/resume` | Lanjutkan batch dari checkpoint terakhir dan masukkan job baru ke queue. Response `202` + job; `409` kalau tidak ada checkpoint |
 
-Aturan input `POST` dan `PUT`: `name` wajib, maksimal 200 karakter. `sql` wajib, tidak boleh kosong.
+Aturan input `POST` dan `PUT`: `name` wajib, maksimal 200 karakter. `sql` wajib, tidak boleh kosong. `sql_down` wajib kecuali `irreversible=true`. `batch_size` 0–1.000.000.
+
+### Batch per potongan row
+
+Migration dengan `batch_size > 0` dieksekusi per potongan row oleh worker queue, bukan satu statement raksasa. Kontrak SQL:
+
+- `sql` harus berupa `UPDATE`, `DELETE`, atau `WITH` yang memakai `:last_id` dan `:batch_size` serta `ORDER BY id`; platform menambahkan `RETURNING id` bila belum ada. Contoh:
+  `UPDATE big SET ... WHERE id IN (SELECT id FROM big WHERE id > :last_id ORDER BY id LIMIT :batch_size)`
+- `sql_down` harus memakai `:from_id` dan `:to_id` untuk membalik satu potongan. Contoh:
+  `UPDATE big SET ... WHERE id >= :from_id AND id <= :to_id`
+- Setiap potongan berjalan dalam transaction sendiri. Checkpoint `(execution_id, run_id, chunk_no, from_id, to_id, cursor)` ditulis di database target (`_dbmp.batch_runs`, `_dbmp.batch_chunks`) **dalam transaction yang sama** dengan data.
+- `batch_size > 0` tidak boleh `irreversible` karena cancel membutuhkan `sql_down`.
+- Approval dan queue tetap wajib: migration diajukan lewat change request, disetujui leader, lalu worker menjalankannya.
+- Cancel: berhenti di batas potongan, lalu SQL down dijalankan untuk chunk committed dari yang terakhir; status `batch_status` menjadi `reverted` atau `partially_reverted`, migration menjadi `partial`.
+- Resume: job baru membaca checkpoint target dan melanjutkan dari cursor terakhir.
+- Endpoint `/batches` lama (banyak migration) mengembalikan `410 Gone`; gunakan `batch_size` pada migration.
 
 ### Review dan approval (change request)
 

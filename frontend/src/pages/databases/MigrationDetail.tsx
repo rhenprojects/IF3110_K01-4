@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import {
-  useChangeRequests, useDispatchChangeRequest, useJob, useJobs, useMigration, useMigrationExecutions, useSubmitChangeRequest,
+  useCancelBatchMigration, useChangeRequests, useDispatchChangeRequest, useJob, useJobs, useMigration, useMigrationExecutions,
+  useResumeBatchMigration, useSubmitChangeRequest,
 } from "../../features/databases/hooks";
 import { Badge, Button, ConfirmDialog, ErrorBox, Loading, Table, generalError, td } from "../../components/ui";
 import { useToast } from "../../components/toast";
@@ -96,6 +97,8 @@ export default function MigrationDetail() {
   const crs = useChangeRequests(db.id);
   const jobs = useJobs(db.id);
   const history = useMigrationExecutions(db.id, mid);
+  const cancelBatch = useCancelBatchMigration(db.id);
+  const resumeBatch = useResumeBatchMigration(db.id);
   const [confirm, setConfirm] = useState<JobKind | null>(null);
 
   //[review] pengajuan terbaru untuk migration ini
@@ -118,8 +121,8 @@ export default function MigrationDetail() {
   //[rollback] rollback sukses tidak mengubah baris migration, jadi keadaan "dibatalkan" dibaca dari riwayat eksekusi
   const lastOk = [...(history.data ?? [])].sort((a, z) => z.id - a.id).find((x) => x.status === "success");
   const rolledBack = m.status === "success" && lastOk?.kind === "rollback";
-  const canRollback = m.status === "success" && !m.irreversible && !rolledBack;
-  const canForward = m.status === "failed" || rolledBack;
+  const canRollback = m.status === "success" && !m.irreversible && !rolledBack && m.batch_size === 0;
+  const canForward = (m.status === "failed" || rolledBack) && m.batch_size === 0;
 
   async function send(kind: JobKind) {
     try {
@@ -165,6 +168,36 @@ export default function MigrationDetail() {
           onDispatch={editable && cr.status === "approved" && !cr.job_id ? () => dispatch.mutate(cr.id) : undefined} />
       )}
       {job && <JobPanel job={job} />}
+
+      {m.batch_size > 0 && (
+        <section className="space-y-2 rounded border bg-slate-50 p-3 text-sm">
+          <div className="flex flex-wrap items-center gap-3">
+            <h3 className="font-medium">Batch per potongan row</h3>
+            <Badge tone={m.batch_status === "success" ? "green" : m.batch_status.includes("reverted") ? "red" : "amber"}>
+              {m.batch_status || "belum berjalan"}
+            </Badge>
+            <span className="text-slate-600">{m.batch_rows} row · {m.batch_chunks} chunk · cursor {m.batch_cursor}</span>
+          </div>
+          <p className="text-xs text-slate-500">Batch size {m.batch_size}. Checkpoint disimpan di database target pada transaction yang sama dengan potongan.</p>
+          {m.batch_cancel_requested && (
+            <p className="text-xs text-amber-700">Permintaan cancel diterima; worker berhenti di batas potongan lalu menjalankan SQL down terbalik.</p>
+          )}
+          <div className="flex flex-wrap gap-2">
+            {(m.batch_status === "running" || m.batch_status === "partial") && (
+              <Button variant="danger" onClick={() => cancelBatch.mutate(m.id)} disabled={cancelBatch.isPending || m.batch_cancel_requested}>
+                Batalkan & revert
+              </Button>
+            )}
+            {m.status === "partial" && !m.batch_cancel_requested && (
+              <Button variant="primary" onClick={() => resumeBatch.mutate(m.id)} disabled={resumeBatch.isPending}>
+                Lanjutkan dari checkpoint
+              </Button>
+            )}
+          </div>
+        </section>
+      )}
+
+      <ErrorBox message={generalError(cancelBatch.error, []) ?? generalError(resumeBatch.error, [])} />
 
       <dl className="grid gap-3 text-sm sm:grid-cols-3">
         {meta.map(([k, v]) => (

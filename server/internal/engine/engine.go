@@ -130,6 +130,9 @@ func (e *Engine) Enqueue(ctx context.Context, req EnqueueRequest) (job *models.M
 			return nil, err
 		}
 	case models.JobKindRollback:
+		if m.BatchSize > 0 {
+			return nil, ErrNotExecutable
+		}
 		if m.Irreversible {
 			return nil, ErrIrreversible
 		}
@@ -138,6 +141,9 @@ func (e *Engine) Enqueue(ctx context.Context, req EnqueueRequest) (job *models.M
 		}
 		rollbackOf = &req.RollbackOf
 	case models.JobKindForward:
+		if m.BatchSize > 0 {
+			return nil, ErrNotExecutable
+		}
 		if m.Status != models.MigrationSuccess && m.Status != models.MigrationFailed {
 			return nil, ErrNotExecutable
 		}

@@ -16,6 +16,7 @@ function EditorForm({ db, mid, initial }: { db: DatabaseItem; mid?: string; init
   const [name, setName] = useState(initial.name);
   const [sql, setSql] = useState(initial.sql);
   const [sqlDown, setSqlDown] = useState(initial.sql_down ?? "");
+  const [batchSize, setBatchSize] = useState(String(initial.batch_size ?? 0));
   const [irreversible, setIrreversible] = useState(initial.irreversible ?? false);
   const [reason, setReason] = useState(initial.irreversible_reason ?? "");
 
@@ -23,8 +24,8 @@ function EditorForm({ db, mid, initial }: { db: DatabaseItem; mid?: string; init
     e.preventDefault();
     try {
       const input: MigrationInput = irreversible
-        ? { name, sql, sql_down: "", irreversible: true, irreversible_reason: reason }
-        : { name, sql, sql_down: sqlDown, irreversible: false, irreversible_reason: "" };
+        ? { name, sql, sql_down: "", irreversible: true, irreversible_reason: reason, batch_size: Number(batchSize) || 0 }
+        : { name, sql, sql_down: sqlDown, irreversible: false, irreversible_reason: "", batch_size: Number(batchSize) || 0 };
       const m = await save.mutateAsync({ mid, input });
       toast.success("Draft migration disimpan");
       nav(`/databases/${db.id}/migrations/${m.id}`);
@@ -65,6 +66,10 @@ function EditorForm({ db, mid, initial }: { db: DatabaseItem; mid?: string; init
             placeholder="ALTER TABLE customers DROP COLUMN phone;" onChange={(e) => setSqlDown(e.target.value)} />
         </Field>
       )}
+      <Field label="Batch size (0 = normal)" error={fieldError(save.error, "batch_size")}
+        hint="Isi >0 untuk migration data besar. SQL up wajib memakai :last_id dan :batch_size serta ORDER BY id; SQL down wajib memakai :from_id dan :to_id.">
+        <input type="number" min={0} max={1000000} className={inputCls} value={batchSize} onChange={(e) => setBatchSize(e.target.value)} />
+      </Field>
       <p className="text-xs text-slate-500">
         Disimpan sebagai draft dulu. Saat dijalankan, migration masuk queue lalu dikerjakan worker; satu database hanya menjalankan
         satu migration pada satu waktu. Seluruh SQL berada dalam satu transaction (COMMIT jika sukses, ROLLBACK jika gagal), jadi

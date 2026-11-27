@@ -1,178 +1,91 @@
 # Batch Migration Testing Guide
 
-Panduan ini menjelaskan cara menguji fitur batch migration (item 3): pembuatan batch dari beberapa draft, eksekusi berurutan dengan checkpoint, pembatalan di batas item, retry, audit trail, serta pengamatan metrik.
+Mode batch yang berlaku sekarang adalah **satu migration data besar diproses per potongan row** (`batch_size`). Migration tetap harus lewat **change request + approval leader** dan dieksekusi oleh **worker queue**. Endpoint lama `POST /databases/:id/batches` (banyak migration sekaligus) sudah dinonaktifkan dan menjawab `410 Gone`.
 
-Untuk skenario manual 10 migration, invoker 200 migration, dan checklist keamanan lengkap, lihat [`BATCH_MANUAL_TESTING.md`](BATCH_MANUAL_TESTING.md).
+## 1. Kontrak SQL batch
 
-Batasan yang diuji sengaja mencerminkan keputusan desain:
+Isi `batch_size > 0` pada migration. SQL up dan down memakai placeholder angka:
 
-- Satu transaction per migration, bukan satu transaction untuk seluruh batch.
-- Item yang gagal **tidak** menghentikan batch; batch berhenti hanya bila database target tidak terjangkau atau dibatalkan.
-- Pembatalan hanya dicek di antara item. Item yang sedang berjalan diselesaikan lebih dulu.
-- Kompensasi pembatalan bersifat pembukuan (`compensation_status='retained'`), bukan rollback DDL.
+```sql
+-- up: satu potongan, wajib ORDER BY id
+UPDATE big_table SET processed = true
+WHERE id IN (
+  SELECT id FROM big_table
+  WHERE id > :last_id
+  ORDER BY id
+  LIMIT :batch_size
+);
 
-## 1. Prasyarat
-
-Jalankan dari root repository:
-
-```bash
-docker compose -f deploy/docker-compose.yml up -d --build
-docker compose -f deploy/docker-compose.yml exec db createdb -U postgres target_db   # database target untuk koneksi uji
+-- down: membalik satu potongan
+UPDATE big_table SET processed = false
+WHERE id >= :from_id AND id <= :to_id;
 ```
 
-Seed admin, koneksi, group, dan akses lewat UI atau API admin. Untuk script otomatis, minimal ada satu user admin dan satu database dengan level akses `edit`.
+- SQL up harus `UPDATE`, `DELETE`, atau `WITH`, memakai `:last_id` + `:batch_size`, dan `ORDER BY id`. Platform menambahkan `RETURNING id` bila belum ada.
+- SQL down wajib dan memakai `:from_id` + `:to_id`.
+- Migration batch tidak boleh `irreversible`.
+- Setiap potongan punya transaction sendiri. Checkpoint `(execution_id, run_id, chunk_no, from_id, to_id, cursor)` dan data ditulis dalam **transaction yang sama** di database target (`_dbmp.batch_runs`, `_dbmp.batch_chunks`).
+- Approval + queue tetap wajib; tidak ada jalur eksekusi langsung.
 
-Pembuat batch harus menjadi **Team Leader dari setiap group yang punya akses** ke database uji. Tanpa itu, `POST /batches` ditolak `403`.
+## 2. Uji end-to-end lewat API
 
-Variabel yang dipakai semua script:
-
-| Variabel | Default | Keterangan |
-|---|---|---|
-| `BASE_URL` | `http://localhost:9000/api/v1` | Base URL API |
-| `ADMIN_USERNAME` / `ADMIN_PASSWORD` | `admin` / `admin-password` | Kredensial admin |
-| `SEED` | `300` | Jumlah draft untuk uji throughput |
-| `MIN_RATE` | `20` | Target minimal item/detik |
-
-## 2. Uji keamanan otomatis
+Prasyarat: backend/frontend jalan, database target punya akses `edit`, dan admin adalah Team Leader semua group yang punya akses (atau gunakan akun leader).
 
 ```bash
-bash scripts/security-batch.sh
+DB_ID=<uuid-koneksi> TARGET_DB=<nama-db-target> ROWS=50000 CHUNK=5000 \
+  bash scripts/chunked-batch.sh
 ```
 
-Script login sebagai admin, lalu memeriksa matriks berikut. Kolom "Harapan" adalah status HTTP.
+Script membuat tabel `batch_bench`, migration batch, change request, approve sebagai admin, lalu menunggu worker. Output yang diharapkan:
 
-| Skenario | Harapan |
-|---|---|
-| `POST /databases/:id/batches` tanpa sesi | 401 |
-| `POST /databases/:id/batches` dengan sesi tapi tanpa `X-CSRF-Token` | 403 |
-| `GET /databases/:id/batches/1 OR 1=1` (bukan UUID) | 400/404, bukan 5xx |
-| `GET` batch UUID acak | 404 |
-| `POST` dengan `migration_ids: []` | 400 |
-| `POST` dengan ID migration yang bukan milik koneksi | 409 |
-| `POST` dengan migration berstatus `success` | 409 `only draft migrations can be executed` |
-| `PUT`/`DELETE /databases/:id/executions` | 405 |
-| Body berisi `execution_id` palsu | 202, tetapi `execution_id` item diabaikan dan digenerate server |
-| User level `view` membaca batch | 200 |
-| User level `view` membuat batch | 403 |
-
-Script membuat user/group uji dengan suffix timestamp dan melewati (SKIP) bagian itu bila pembuatannya gagal, misalnya karena sudah ada.
-
-## 3. Uji throughput dan pembatalan
-
-```bash
-SEED=300 bash scripts/perf-batch.sh
+```
+status=success batch=success rows=50000 chunks=10
+Selesai: 50000 row, 10 chunk, ...s, row_salah=0, checkpoint_chunk=10
 ```
 
-Yang dilaporkan:
-
-1. **Throughput** — jumlah item selesai dibagi durasi batch. Target `>= 20` item/detik pada mesin lokal.
-2. **Latency cancel** — waktu sampai batch berstatus `cancelled` setelah `POST /cancel`.
-3. **20 batch paralel** pada database yang sama — diharapkan tepat satu `202` dan sisanya `409` selama batch pertama masih memegang lock. Angka ini dilaporkan sebagai informasi karena batch bisa selesai sebelum request lain tiba.
-
-Untuk membandingkan dengan eksekusi manual, jalankan `scripts/benchmark.sh` dan skenario k6 milik Person 2. Fokus batch adalah overhead per item yang konstan, bukan SQL yang lebih cepat.
-
-### 3.1 Uji dataset besar (baseline vs per potongan row)
+## 3. Uji dataset besar (baseline vs potongan)
 
 ```bash
 ROWS=1000000 CHUNK=10000 bash scripts/dataset-batch.sh
 ```
 
-Script membuat database `dataset_bench` di container `if3110-db`, lalu:
+Script ini mengukur baseline satu `UPDATE` penuh vs chunk manual di level database, lalu mencetak row, durasi, row/detik, jumlah chunk, dan row yang belum terupdate. Syarat spek: baseline > 1 detik; naikkan `ROWS` bila belum. Untuk membandingkan lewat API, gunakan `chunked-batch.sh` di atas.
 
-1. Seed tabel `bench_rows` sebanyak `ROWS` row.
-2. Jalankan satu `UPDATE` penuh sebagai baseline; durasi dibaca dari `EXPLAIN (ANALYZE)`.
-3. Reset payload, lalu ulangi operasi yang sama per `CHUNK` row dengan
-   `WHERE id > last_id ORDER BY id LIMIT batch_size`. Tiap potongan punya transaction sendiri, dan checkpoint (`last_id`, `committed_rows`, `chunks`) ditulis di transaction yang sama.
-4. Cetak row, durasi, row/detik, jumlah chunk, dan row yang belum terupdate.
-
-Contoh hasil lokal (1 juta row, chunk 10.000):
-
-| Mode | Rows | Duration | Rows/s |
-|---|---|---|---|
-| baseline | 1.000.000 | 3.170,9 ms | 315.365 |
-| chunked | 1.000.000 | 14.839,0 ms | 67.390 |
-
-Syarat spek: baseline harus **> 1 detik**; kalau belum, naikkan `ROWS` atau `PAYLOAD`. `rows_belum_terupdate` harus `0`.
-
-Catatan: skrip ini mengukur mekanisme potongan row di level database. Perbandingan lewat API/mode batch aplikasi baru bisa dijalankan setelah model batch aplikasi memakai cursor row; saat ini batch aplikasi masih menjalankan banyak migration, bukan potongan row dari satu migration.
-
-## 4. Uji manual penting
-
-### 4.1 Checkpoint dan resume setelah crash
-
-```bash
-# mulai batch berisi banyak draft, lalu hentikan backend di tengah jalan
-docker kill if3110-backend
-docker compose -f deploy/docker-compose.yml up -d backend
-```
-
-Setelah start, log harus memuat `Memulihkan N batch migration yang terhenti`. Item yang sedang berjalan menjadi `failed` dengan error `interrupted`, batch menjadi `partial` (bila sudah ada item sukses) atau `failed`. Item `pending` tetap `pending` sehingga bisa di-retry.
-
-### 4.2 Retry
-
-```bash
-curl -sS -b cookies.txt -H "X-CSRF-Token: $CSRF" -H 'Content-Type: application/json' \
-  -d '{}' "$BASE_URL/databases/$DB_ID/batches/$BATCH_ID/retry"
-```
-
-Batch baru hanya berisi item `pending` dan `skipped` dari batch lama. `failed` tidak pernah dijalankan ulang; itu keputusan produk. Bila tidak ada kandidat, response `409 nothing to retry`.
-
-### 4.3 IDOR antar koneksi
-
-Ambil ID batch milik koneksi A, lalu panggil dengan ID koneksi B. Harus `404`, bukan `403`, supaya keberadaan batch tidak bocor.
-
-### 4.4 Audit trail
-
-`GET /databases/:id/executions?batch_id=...` mengembalikan item batch dengan `execution_id`, `attempt`, `status`, `duration_ms`, dan `compensation_status`. Endpoint ini hanya membaca: `PUT`/`DELETE` harus `405`.
-
-## 5. Pemeriksaan SQL
+## 4. Verifikasi checkpoint di database target
 
 ```sql
--- tidak ada item yang tertinggal running
-SELECT count(*) FROM migration_batch_items WHERE status = 'running';
+SELECT run_id, status, cursor_id, committed_rows, committed_chunks
+FROM _dbmp.batch_runs ORDER BY updated_at DESC LIMIT 5;
 
--- distribusi status per batch
-SELECT b.id, b.status, b.total, b.processed, b.failed,
-       count(i.id) FILTER (WHERE i.status = 'failed') AS item_failed
-FROM migration_batches b LEFT JOIN migration_batch_items i ON i.batch_id = b.id
-GROUP BY b.id ORDER BY b.created_at DESC LIMIT 10;
-
--- checkpoint bergerak monoton
-SELECT id, last_id, processed, failed, heartbeat_at FROM migration_batches ORDER BY created_at DESC LIMIT 5;
-
--- query cursor memakai index (batch_id, id)
-EXPLAIN (ANALYZE, BUFFERS)
-SELECT * FROM migration_batch_items
-WHERE batch_id = '...' AND status = 'pending' AND id > 0
-ORDER BY id LIMIT 100;
-
--- index benar-benar dipakai
-SELECT relname, indexrelname, idx_scan FROM pg_stat_user_indexes
-WHERE relname LIKE 'migration_batch%' ORDER BY idx_scan DESC;
+SELECT run_id, chunk_no, from_id, to_id, rows, committed_at
+FROM _dbmp.batch_chunks ORDER BY run_id, chunk_no;
 ```
+
+`committed_rows` harus sama dengan jumlah row yang sudah diproses; `cursor_id` sama dengan `max(to_id)` chunk terakhir. Kalau worker mati, baris run tetap ada dan job baru bisa melanjutkan dari cursor.
+
+## 5. Cancel dan resume
+
+```bash
+# hentikan di batas potongan, lalu SQL down dijalankan terbalik
+curl -b cookies.txt -H "X-CSRF-Token: $CSRF" -X POST \
+  "$BASE_URL/databases/$DB_ID/migrations/$MID/batch/cancel"
+
+# lanjutkan dari checkpoint
+curl -b cookies.txt -H "X-CSRF-Token: $CSRF" -X POST \
+  "$BASE_URL/databases/$DB_ID/migrations/$MID/batch/resume"
+```
+
+- Cancel: chunk committed dibalik dari yang terakhir. Hasil `batch_status=reverted` (semua) atau `partially_reverted` (sebagian); migration menjadi `partial`.
+- Resume: worker membaca `_dbmp.batch_runs.cursor_id` dan melanjutkan; tidak mengulang chunk yang sudah committed.
+- Cancel setelah batch selesai penuh belum didukung; gunakan migration baru dengan SQL down yang sesuai.
 
 ## 6. Observability
 
-Metrik hanya dilayani pada listener terpisah, aktif bila `METRICS_ADDR` diisi (default compose: `backend:9101`).
-
-```bash
-curl -sS http://localhost:9101/metrics | grep '^migration_'
-```
-
-| Metrik | Tipe | Label |
-|---|---|---|
-| `migration_batch_total` | counter | `status` |
-| `migration_batch_items_total` | counter | `status` |
-| `migration_item_duration_seconds` | histogram | `status` |
-| `migration_batch_duration_seconds` | histogram | — |
-
-Grafana: <https://localhost:3000> (admin/admin), dashboard **Batch Migrations**. Prometheus: <https://localhost:9090>.
-
-Keduanya memakai self-signed certificate; browser akan menampilkan peringatan sampai CA lokal dipercaya. Grafana terhubung ke Prometheus lewat HTTPS internal dengan `tlsSkipVerify` untuk development.
+Setiap migration tetap tercatat di `migration_executions` dan `migration_jobs`. Mode chunked juga mengisi `migration_batch_total{status=success|partial|cancelled}`, `migration_batch_duration_seconds`, dan `migration_item_duration_seconds` per potongan, sehingga dashboard batch tetap terisi. `migration_batch_items_total` sekarang menghitung potongan (chunk), bukan migration.
 
 ## 7. Batasan yang diketahui
 
-- Lock eksekusi masih `sync.Map` di dalam proses (milik Person 1). Dengan lebih dari satu instance backend, dua instance bisa menjalankan migration berbeda pada database target yang sama. Jangan scale backend lebih dari satu replika sampai lock dipindah ke database.
-- Batch masih dijalankan langsung oleh proses API setelah pembuatnya terbukti leader semua group yang punya akses. Batch belum dipublikasikan sebagai job queue; pemindahan ke change request + queue adalah pekerjaan lanjutan.
-- AutoMigrate membuat primary key item sebagai `bigserial`, bukan `GENERATED ALWAYS AS IDENTITY`. Perilaku fungsional sama; kolom identitas bisa dirapikan lewat migration manual bila diperlukan.
-- Pembatalan tidak membalik DDL yang sudah commit. `compensation_status` hanya menandai bahwa item selesai sebelum pembatalan dan tidak dikompensasi.
+- Checkpoint disimpan di database target, bukan database platform. Ini dipilih agar checkpoint dan potongan data berada dalam satu transaction.
+- Satu batch run aktif per migration; resume memakai `batch_run_id` yang sama.
+- Cancel setelah batch sukses penuh belum ada endpoint khusus.
+- Worker masih satu proses per replika; jangan scale backend lebih dari satu replika tanpa memindahkan lock.

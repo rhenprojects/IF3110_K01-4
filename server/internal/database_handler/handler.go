@@ -83,6 +83,8 @@ func (h *Handler) RegisterRoutes(router fiber.Router) {
 	g.Put("/:id/migrations/:mid", h.UpdateMigration)
 	g.Get("/:id/migrations/:mid/executions", h.ListMigrationExecutions)
 	g.Post("/:id/migrations/:mid/change-requests", h.SubmitChangeRequest)
+	g.Post("/:id/migrations/:mid/batch/cancel", h.CancelBatchMigration)
+	g.Post("/:id/migrations/:mid/batch/resume", h.ResumeBatchMigration)
 	g.Get("/:id/change-requests", h.ListChangeRequests)
 	g.Post("/:id/change-requests/:rid/approve", h.ApproveChangeRequest)
 	g.Post("/:id/change-requests/:rid/reject", h.RejectChangeRequest)
@@ -250,6 +252,7 @@ func (h *Handler) CreateMigration(c *fiber.Ctx) error {
 		SQLDown:            input.SQLDown,
 		Irreversible:       input.Irreversible,
 		IrreversibleReason: input.IrreversibleReason,
+		BatchSize:          input.BatchSize,
 		Revision:           1,
 		Status:             models.MigrationDraft,
 		Error:              "",
@@ -294,6 +297,7 @@ func (h *Handler) UpdateMigration(c *fiber.Ctx) error {
 	migration.SQLDown = input.SQLDown
 	migration.Irreversible = input.Irreversible
 	migration.IrreversibleReason = input.IrreversibleReason
+	migration.BatchSize = input.BatchSize
 	migration.Revision++
 	if err := h.db.WithContext(c.UserContext()).Save(migration).Error; err != nil {
 		return h.writeError(c, err)
@@ -302,6 +306,44 @@ func (h *Handler) UpdateMigration(c *fiber.Ctx) error {
 		return h.writeError(c, err)
 	}
 	return c.JSON(migration)
+}
+
+func (h *Handler) CancelBatchMigration(c *fiber.Ctx) error {
+	conn, _, err := h.accessible(c, true)
+	if err != nil {
+		return h.writeError(c, err)
+	}
+	m, err := h.findMigration(c, conn.ID, c.Params("mid"))
+	if err != nil {
+		return h.writeError(c, err)
+	}
+	if m.BatchSize <= 0 {
+		return httpx.ValidationError(c, "batch_size", "migration is not a batch migration")
+	}
+	if err := h.db.WithContext(c.UserContext()).Model(&models.Migration{}).
+		Where("id = ?", m.ID).Update("batch_cancel_requested", true).Error; err != nil {
+		return h.writeError(c, err)
+	}
+	return c.Status(fiber.StatusAccepted).JSON(fiber.Map{"status": "cancel_requested"})
+}
+
+func (h *Handler) ResumeBatchMigration(c *fiber.Ctx) error {
+	conn, _, err := h.accessible(c, true)
+	if err != nil {
+		return h.writeError(c, err)
+	}
+	m, err := h.findMigration(c, conn.ID, c.Params("mid"))
+	if err != nil {
+		return h.writeError(c, err)
+	}
+	if m.BatchSize <= 0 || m.BatchRunID == nil {
+		return httpx.Error(c, fiber.StatusConflict, "migration has no batch checkpoint to resume")
+	}
+	job, err := h.engine.EnqueueResume(c.UserContext(), conn.ID, m.ID, authctx.UserID(c))
+	if err != nil {
+		return h.writeError(c, err)
+	}
+	return c.Status(fiber.StatusAccepted).JSON(job)
 }
 
 func (h *Handler) ListJobs(c *fiber.Ctx) error {
@@ -351,6 +393,7 @@ type migrationInput struct {
 	SQLDown            string `json:"sql_down"`
 	Irreversible       bool   `json:"irreversible"`
 	IrreversibleReason string `json:"irreversible_reason"`
+	BatchSize          int    `json:"batch_size"`
 }
 
 // parseMigrationInput hanya mewajibkan nama dan SQL up; draft boleh belum punya SQL down
@@ -366,6 +409,8 @@ func parseMigrationInput(c *fiber.Ctx) (migrationInput, error) {
 		return req, &validationError{"name", "required, max 200 characters"}
 	case strings.TrimSpace(req.SQL) == "":
 		return req, &validationError{"sql", "required"}
+	case req.BatchSize < 0 || req.BatchSize > 1000000:
+		return req, &validationError{"batch_size", "must be between 0 and 1000000"}
 	}
 	if !req.Irreversible {
 		req.IrreversibleReason = ""
@@ -487,6 +532,8 @@ func (h *Handler) writeError(c *fiber.Ctx, err error) error {
 	case errors.Is(err, review.ErrNotLeader), errors.Is(err, review.ErrEditAccessRequired):
 		return httpx.Error(c, fiber.StatusForbidden, err.Error())
 	case isReviewConflict(err):
+		return httpx.Error(c, fiber.StatusConflict, err.Error())
+	case errors.Is(err, review.ErrBatchRevert):
 		return httpx.Error(c, fiber.StatusConflict, err.Error())
 	case errors.Is(err, review.ErrDispatchFailed):
 		log.Printf("[database] %v", err)

@@ -40,6 +40,11 @@ type attemptResult struct {
 	transient bool
 	uncertain bool // commit gagal dan bukti eksekusi tidak bisa diperiksa
 	recovered bool // hasil dipastikan lewat ledger, bukan dari eksekusi attempt ini
+
+	batchStatus string
+	batchCursor int64
+	batchRows   int64
+	batchChunks int64
 }
 
 func (r attemptResult) durationMs() int64 {
@@ -110,6 +115,10 @@ func (e *Engine) execute(ctx context.Context, spec attemptSpec) (_ *models.Migra
 	pool, err := e.pools.Pool(ctx, spec.connectionID)
 	if err != nil {
 		return fail(err, "connect")
+	}
+	if m.BatchSize > 0 {
+		res = e.executeChunked(ctx, spec, &m, pool)
+		return &m, res, nil
 	}
 	if err := ensureLedger(ctx, pool); err != nil {
 		return fail(err, "ledger")
@@ -183,6 +192,42 @@ func (e *Engine) execute(ctx context.Context, spec attemptSpec) (_ *models.Migra
 // applyToMigration memperbarui baris migration sesuai hasil akhir eksekusi up atau forward, lalu mengembalikan versi migration untuk dicatat di riwayat.
 // Forward yang gagal dan rollback tidak mengubah baris migration.
 func (e *Engine) applyToMigration(tx *gorm.DB, m *models.Migration, kind models.JobKind, actor string, res attemptResult, final bool) (*int, error) {
+	if m != nil && m.BatchSize > 0 && res.batchStatus != "" {
+		updates := map[string]any{
+			"batch_status": res.batchStatus, "batch_cursor": res.batchCursor,
+			"batch_rows": res.batchRows, "batch_chunks": res.batchChunks,
+			"batch_cancel_requested": false, "executed_by": actor, "executed_at": res.finished,
+			"duration_ms": res.durationMs(), "updated_at": e.now(),
+		}
+		var version *int
+		if res.status == models.ExecutionSuccess {
+			v := m.Version
+			if v == nil {
+				var max sql.NullInt64
+				if err := tx.Raw(`SELECT MAX(version) FROM migrations WHERE connection_id = ? AND status = ?`,
+					m.ConnectionID, models.MigrationSuccess).Scan(&max).Error; err != nil {
+					return nil, err
+				}
+				next := 1
+				if max.Valid {
+					next = int(max.Int64) + 1
+				}
+				v = &next
+			}
+			version = v
+			updates["status"] = models.MigrationSuccess
+			updates["version"] = *v
+			updates["error"] = ""
+		} else {
+			updates["status"] = models.MigrationPartial
+			updates["version"] = nil
+			updates["error"] = res.errMsg
+		}
+		if err := tx.Model(&models.Migration{}).Where("id = ?", m.ID).Updates(updates).Error; err != nil {
+			return nil, err
+		}
+		return version, nil
+	}
 	skip := kind == models.JobKindRollback ||
 		(kind == models.JobKindForward && res.status != models.ExecutionSuccess) ||
 		(!final && res.status != models.ExecutionSuccess)

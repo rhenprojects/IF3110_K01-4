@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
+# DEPRECATED: mode batch multi-migration sudah dinonaktifkan.
 # Throughput and cancellation test for batch migrations.
 # Seeds draft migrations through the public API, runs one batch and reports
 # processed items per second, then checks cancellation latency.
 # Pembuat batch harus leader dari semua group yang punya akses ke database uji.
 # Usage: SEED=300 ./scripts/perf-batch.sh
 set -uo pipefail
+echo "Script mode batch lama dinonaktifkan. Gunakan scripts/chunked-batch.sh." >&2
+exit 2
 
 BASE_URL="${BASE_URL:-http://localhost:9000/api/v1}"
 ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"

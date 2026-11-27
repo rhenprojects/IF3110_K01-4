@@ -20,6 +20,7 @@ Login → Access Control → Pilih Database → Lihat Schema/Data
 - **Koneksi database**: koneksi ke satu atau lebih database PostgreSQL; password disimpan terenkripsi (AES-256-GCM); kegagalan koneksi ditangani dengan pesan yang aman.
 - **Database viewer**: schema, table, column, constraint, index, dan isi tabel dengan paging.
 - **Migration**: editor SQL up/down (atau ditandai irreversible), eksekusi asynchronous lewat queue dan worker dalam transaction (commit jika berhasil, rollback jika gagal), versi linear per database, dan riwayat lengkap (versi, SQL, pelaksana, waktu, status).
+- **Batch per potongan row**: migration data besar dijalankan per `batch_size` row, satu transaction per potongan, checkpoint `(execution, run, cursor)` ditulis di database target pada transaction yang sama. Bisa dilanjutkan dari checkpoint atau dibatalkan dengan SQL down terbalik (`partially_reverted`).
 - **Workflow & approval**: setiap perubahan (up, rollback, forward) harus disetujui Team Leader dari setiap group yang punya akses ke database tersebut sebelum masuk queue.
 - **Rollback & Forward**: membatalkan migration aktif terakhir dengan SQL down, lalu menerapkannya kembali dengan forward. Riwayat punya opsi **Hide rollback**.
 - **SPA responsif**: seluruh halaman dapat dipakai di desktop maupun mobile.

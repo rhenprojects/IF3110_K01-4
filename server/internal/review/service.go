@@ -32,6 +32,7 @@ var (
 	ErrAlreadyDecided      = errors.New("you have already decided on this change request")
 	ErrStale               = errors.New("change request is no longer valid; submit a new one")
 	ErrDispatchFailed      = errors.New("approved but could not be queued")
+	ErrBatchRevert         = errors.New("batch migration must be cancelled/reverted via /batch/cancel")
 )
 
 type EnqueueFunc func(ctx context.Context, cr models.ChangeRequest) (jobID string, err error)
@@ -102,10 +103,16 @@ func (s *Service) Submit(ctx context.Context, userID, connectionID, migrationID 
 				}
 			}
 		case models.JobKindForward:
+			if m.BatchSize > 0 {
+				return ErrBatchRevert
+			}
 			if err := forwardCheck(tx, &m); err != nil {
 				return err
 			}
 		default:
+			if m.BatchSize > 0 {
+				return ErrBatchRevert
+			}
 			target, err := rollbackTarget(tx, &m)
 			if err != nil {
 				return err

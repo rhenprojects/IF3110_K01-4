@@ -19,6 +19,7 @@ const STATUS: Record<MigrationStatus, { tone: "neutral" | "amber" | "green" | "r
   approved: { tone: "neutral", label: "Disetujui" },
   success: { tone: "green", label: "Berhasil" },
   failed: { tone: "red", label: "Gagal (rollback)" },
+  partial: { tone: "amber", label: "Sebagian / checkpoint" },
 };
 export function StatusBadge({ status }: { status: MigrationStatus }) {
   return <Badge tone={STATUS[status].tone}>{STATUS[status].label}</Badge>;

@@ -61,6 +61,7 @@ function checkInput(b: Partial<MigrationInput>): Response | null {
 const definition = (b: Partial<MigrationInput>) => ({
   name: b.name!.trim(), sql: b.sql!, sql_down: b.sql_down ?? "",
   irreversible: !!b.irreversible, irreversible_reason: (b.irreversible_reason ?? "").trim(),
+  batch_size: b.batch_size ?? 0,
 });
 
 //[queue] sama dengan engine.ValidateDefinition: up wajib, lalu down atau alasan irreversible
@@ -301,6 +302,7 @@ export const databaseHandlers = [
     if (bad) return bad;
     const m: Migration = {
       id: crypto.randomUUID(), connection_id: conn.id, version: null, ...definition(b), revision: 1, status: "draft", error: "",
+      batch_run_id: null, batch_status: "", batch_cursor: 0, batch_rows: 0, batch_chunks: 0, batch_cancel_requested: false,
       created_by: user.id, created_by_name: user.name, executed_by: null, executed_by_name: null,
       created_at: now(), updated_at: now(), executed_at: null, duration_ms: null,
     };

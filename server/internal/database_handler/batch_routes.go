@@ -27,31 +27,10 @@ func (h *Handler) RegisterBatchRoutes(router fiber.Router) {
 	g.Get("/:id/executions", h.ListExecutions)
 }
 
+// CreateBatch dipertahankan sebagai 410. Mode batch sekarang melekat pada
+// satu migration lewat field batch_size dan tetap melalui review + queue.
 func (h *Handler) CreateBatch(c *fiber.Ctx) error {
-	conn, _, err := h.accessible(c, true)
-	if err != nil {
-		return h.writeError(c, err)
-	}
-	// shortcut: batch hanya boleh dijalankan oleh leader semua group yang punya
-	// akses; pemindahan batch ke change request + queue belum diimplementasikan.
-	if err := h.requireBatchLeader(c, conn.ID); err != nil {
-		return httpx.Error(c, fiber.StatusForbidden, err.Error())
-	}
-	var req struct {
-		MigrationIDs []string `json:"migration_ids"`
-	}
-	if err := c.BodyParser(&req); err != nil {
-		return httpx.Error(c, fiber.StatusBadRequest, "invalid request body")
-	}
-	coordinator := h.NewBatchCoordinator()
-	b, err := coordinator.Create(c.UserContext(), conn.ID, authctx.UserID(c), req.MigrationIDs)
-	if err != nil {
-		return h.writeBatchError(c, err)
-	}
-	if err := coordinator.Start(b); err != nil {
-		return h.writeBatchError(c, err)
-	}
-	return c.Status(fiber.StatusAccepted).JSON(b)
+	return httpx.Error(c, fiber.StatusGone, "batch per migration: set batch_size pada migration, lalu ajukan review")
 }
 
 func (h *Handler) ListBatches(c *fiber.Ctx) error {
@@ -114,19 +93,7 @@ func (h *Handler) CancelBatch(c *fiber.Ctx) error {
 }
 
 func (h *Handler) RetryBatch(c *fiber.Ctx) error {
-	b, err := h.batchForRequest(c)
-	if err != nil {
-		return h.writeError(c, err)
-	}
-	coordinator := h.NewBatchCoordinator()
-	retried, err := coordinator.Retry(c.UserContext(), b, authctx.UserID(c))
-	if err != nil {
-		return h.writeBatchError(c, err)
-	}
-	if err := coordinator.Start(retried); err != nil {
-		return h.writeBatchError(c, err)
-	}
-	return c.Status(fiber.StatusCreated).JSON(retried)
+	return httpx.Error(c, fiber.StatusGone, "batch per migration: set batch_size pada migration, lalu ajukan review")
 }
 
 func (h *Handler) ListExecutions(c *fiber.Ctx) error {
@@ -194,28 +161,6 @@ func (h *Handler) attachBatchNames(c *fiber.Ctx, batches []*models.MigrationBatc
 		if b.CancelledBy != nil {
 			name := names[*b.CancelledBy]
 			b.CancelledByName = &name
-		}
-	}
-	return nil
-}
-
-func (h *Handler) requireBatchLeader(c *fiber.Ctx, connectionID string) error {
-	var rows []struct {
-		LeaderID *string
-	}
-	if err := h.db.WithContext(c.UserContext()).Table("groups").
-		Select("groups.leader_id AS leader_id").
-		Joins("JOIN group_database_access ON group_database_access.group_id = groups.id").
-		Where("group_database_access.connection_id = ?", connectionID).
-		Scan(&rows).Error; err != nil {
-		return err
-	}
-	if len(rows) == 0 {
-		return errors.New("only a group leader can run a batch")
-	}
-	for _, row := range rows {
-		if row.LeaderID == nil || *row.LeaderID != authctx.UserID(c) {
-			return errors.New("only a group leader can run a batch; every group with access must have you as its leader")
 		}
 	}
 	return nil
