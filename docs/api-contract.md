@@ -151,7 +151,7 @@ Artinya admin yang ingin melihat atau mengubah suatu database harus menjadikan d
   - `failed`: dijalankan tapi gagal dan di-rollback. Tidak punya versi.
   - `partial`: batch berhenti/gagal di tengah; sebagian potongan sudah committed. Bisa dilanjutkan dari checkpoint atau dibatalkan/revert.
 - Saat dijalankan, seluruh SQL berjalan dalam **satu transaction**: semua berhasil maka `COMMIT`, ada satu yang gagal maka `ROLLBACK`.
-- Dalam satu database, **hanya satu migration yang boleh berjalan pada satu waktu**. Kalau ada yang sedang berjalan, jawab `409`.
+- Dalam satu database, **hanya satu migration yang dijalankan pada satu waktu**; permintaan lain diantrikan dan baru dieksekusi setelah job sebelumnya selesai. Lock berlaku lintas worker, dan satu database fisik hanya boleh punya satu koneksi agar lock itu benar-benar mengunci database tersebut.
 - Riwayat migration **tidak bisa dihapus**.
 - SQL yang tidak bisa berjalan di dalam transaction (misalnya `CREATE INDEX CONCURRENTLY`) akan gagal. Itu perilaku yang diterima.
 
@@ -278,7 +278,7 @@ Aturan input:
 | Field | Aturan |
 |---|---|
 | `name` | Wajib, maksimal 100 karakter, unik (`409` kalau sudah ada) |
-| `host` | Wajib, maksimal 255 karakter, hanya satu hostname atau IP (tanpa spasi, koma, atau `/`) |
+| `host` | Wajib, maksimal 255 karakter, hanya satu hostname atau IP (tanpa spasi, koma, atau `/`). Kombinasi `host`+`port`+`db_name` unik di antara koneksi aktif (`409` kalau database target itu sudah terdaftar) |
 | `port` | 1–65535, default `5432` |
 | `db_name` | Wajib, maksimal 100 karakter |
 | `username` | Wajib, maksimal 100 karakter |

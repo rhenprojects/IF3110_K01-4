@@ -139,6 +139,8 @@ func writeError(c *fiber.Ctx, err error) error {
 		return httpx.Error(c, fiber.StatusNotFound, ErrNotFound.Error())
 	case errors.Is(err, ErrDuplicateName):
 		return httpx.Error(c, fiber.StatusConflict, ErrDuplicateName.Error())
+	case errors.Is(err, ErrDuplicateTarget):
+		return httpx.Error(c, fiber.StatusConflict, ErrDuplicateTarget.Error())
 	case errors.Is(err, ErrDecrypt):
 		return httpx.Error(c, fiber.StatusInternalServerError, ErrDecrypt.Error()+"; please re-enter the password")
 	}

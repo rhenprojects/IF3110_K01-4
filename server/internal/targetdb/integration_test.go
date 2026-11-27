@@ -228,6 +228,31 @@ func TestIntegrationDuplicateName(t *testing.T) {
 	}
 }
 
+// Satu database fisik tidak boleh punya dua koneksi: lock "satu migration per
+// database" di-key per koneksi, jadi duplikat akan membuka jalan paralel.
+func TestIntegrationDuplicateTargetDatabase(t *testing.T) {
+	e := setup(t)
+	if status, _, raw := e.do(t, admin, "POST", "/admin/connections", e.validInput("first")); status != fiber.StatusCreated {
+		t.Fatalf("create: status %d, body %s", status, raw)
+	}
+	status, body, raw := e.do(t, admin, "POST", "/admin/connections", e.validInput("second"))
+	if status != fiber.StatusConflict || body["error"] != targetdb.ErrDuplicateTarget.Error() {
+		t.Fatalf("duplicate target: status %d, body %s", status, raw)
+	}
+
+	// Setelah koneksi lama dihapus (soft delete), target yang sama boleh didaftarkan lagi.
+	var existing models.DBConnection
+	if err := e.db.First(&existing).Error; err != nil {
+		t.Fatalf("load connection: %v", err)
+	}
+	if status, body, raw := e.do(t, admin, "DELETE", "/admin/connections/"+existing.ID, nil); status != fiber.StatusNoContent {
+		t.Fatalf("delete: status %d, body %v %s", status, body, raw)
+	}
+	if status, _, raw := e.do(t, admin, "POST", "/admin/connections", e.validInput("second")); status != fiber.StatusCreated {
+		t.Fatalf("recreate after delete: status %d, body %s", status, raw)
+	}
+}
+
 func TestIntegrationValidationError(t *testing.T) {
 	e := setup(t)
 	in := e.validInput("bad")

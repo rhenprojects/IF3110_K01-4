@@ -233,9 +233,17 @@ func (s *Service) paramsFor(ctx context.Context, id string) (ConnParams, error) 
 	}, nil
 }
 
+// dbConnectionTargetIndex adalah nama unique index (host, port, db_name) di db_connections.
+const dbConnectionTargetIndex = "idx_db_connections_target"
+
 func translateDBError(err error) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		// Satu database fisik hanya boleh punya satu koneksi agar lock "satu
+		// migration per database" benar-benar mengunci database itu.
+		if pgErr.ConstraintName == dbConnectionTargetIndex {
+			return ErrDuplicateTarget
+		}
 		return ErrDuplicateName
 	}
 	return err

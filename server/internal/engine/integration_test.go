@@ -101,7 +101,7 @@ func (f *fixture) s() string { return pgx.Identifier{f.schema}.Sanitize() }
 
 func (f *fixture) addConnection(name string, pool *pgxpool.Pool) string {
 	f.t.Helper()
-	conn := models.DBConnection{Name: name, Host: "stub", Port: 5432, DBName: "stub", Username: "stub",
+	conn := models.DBConnection{Name: name, Host: "stub", Port: 5432, DBName: "stub_" + name, Username: "stub",
 		PasswordEnc: []byte{1}, SSLMode: "disable"}
 	if err := f.db.Create(&conn).Error; err != nil {
 		f.t.Fatal(err)

@@ -59,7 +59,7 @@ func seed(t *testing.T, db *gorm.DB, drafts int, status models.MigrationStatus) 
 	t.Helper()
 	conn := models.DBConnection{
 		Name: fmt.Sprintf("batch-test-%s", uuid.NewString()), Host: "localhost", Port: 5432,
-		DBName: "target", Username: "u", PasswordEnc: []byte{1}, SSLMode: "disable",
+		DBName: fmt.Sprintf("target-%s", uuid.NewString()), Username: "u", PasswordEnc: []byte{1}, SSLMode: "disable",
 	}
 	if err := db.Create(&conn).Error; err != nil {
 		t.Fatalf("connection: %v", err)
