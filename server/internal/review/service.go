@@ -489,8 +489,20 @@ func rollbackTarget(tx *gorm.DB, m *models.Migration) (workflow.Execution, error
 	if err != nil {
 		return workflow.Execution{}, err
 	}
+	// Batch yang sudah di-revert penuh tidak lagi berlaku; jangan biarkan dia
+	// menahan rollback migration sebelumnya.
+	var reverted []string
+	if err := tx.Model(&models.Migration{}).
+		Where("connection_id = ? AND status = ? AND batch_status = ?", m.ConnectionID, models.MigrationPartial, "reverted").
+		Pluck("id", &reverted).Error; err != nil {
+		return workflow.Execution{}, err
+	}
+	excluded := make(map[string]bool, len(reverted))
+	for _, id := range reverted {
+		excluded[id] = true
+	}
 	reversible := !m.Irreversible && strings.TrimSpace(m.SQLDown) != ""
-	return workflow.RollbackTarget(m.ID, reversible, history)
+	return workflow.RollbackTargetExcluding(m.ID, reversible, history, excluded)
 }
 
 // Urutan linear = urutan kemunculan pertama migration di riwayat eksekusi.

@@ -1,4 +1,4 @@
-# Skenario Uji Batch — 73 kasus
+# Skenario Uji Batch — 76 kasus
 
 Matriks uji untuk mode **migration per potongan row** (`batch_size > 0`). Setiap baris punya input konkret dan hasil yang diharapkan.
 
@@ -148,7 +148,7 @@ RETURNING processed;
 |---|---|---|---|---|
 | E01 | Cancel saat running | S4 batch `1000`, klik **Hentikan batch** | `202`, berhenti di batas chunk, `partial` | A |
 | E02 | Cancel dua kali | klik dua kali | Tetap `202`, idempoten | M |
-| E03 | Cancel saat queued | klik sebelum worker mulai | `409` (belum ada checkpoint) | A |
+| E03 | Cancel saat queued | klik sebelum worker mulai | `202` `stop_requested`; worker berhenti sebelum chunk pertama (`partial`, 0 row) | A |
 | E04 | Cancel migration biasa | batch size `0` | `400` field `batch_size` | A |
 | E05 | Resume saat bukan partial | migration `success` | `409` | A |
 | E06 | Resume saat partial | S4 lalu cancel, klik **Ajukan lanjutkan** | `201` CR `up`, belum ada job | A |
@@ -161,6 +161,9 @@ RETURNING processed;
 | E13 | Cancel setelah success | klik Hentikan setelah sukses | `201` CR `revert` | A |
 | E14 | Viewer cancel/revert | login akses view | `403` | A |
 | E15 | Data setelah revert | S2 lalu revert | `processed` kembali `false`, versi dilepas | M |
+| E16 | Revert tanpa checkpoint | set `batch_run_id` ke run yang tidak ada | `409` "pembatalan tidak aman"; buat migration perbaikan | A |
+| E17 | Revert kedua setelah penuh | revert penuh lalu klik revert lagi | `409` "batch sudah dibatalkan" | A |
+| E18 | Rollback setelah revert penuh | revert batch v terakhir lalu rollback migration sebelumnya | Diizinkan: revert penuh tidak menahan slot aktif | A |
 
 ## F. Konkurensi dan lock
 
@@ -197,10 +200,10 @@ RETURNING processed;
 | # | Perilaku sekarang | Dampak | Kandidat perbaikan |
 |---|---|---|---|
 | 1 | `id <= 0` tidak pernah diproses (cursor mulai 0) | Data id 0/negatif terlewat | Dokumentasikan "id harus positif", atau cursor awal `MIN(id)-1` |
-| 2 | Cancel saat job `queued` → `409` | Belum bisa membatalkan sebelum worker mulai | Cancel job queue |
 | 3 | `RETURNING` non-bigint / tabel tanpa `id` | Gagal saat chunk pertama (`partial`) | Validasi awal saat submit |
 | 4 | Batch `DELETE` diizinkan | Revert bergantung SQL down yang dirancang khusus | Peringatan di editor |
-| 5 | Revert penuh **tidak** melepas slot aktif | Migration sebelumnya tetap tidak bisa di-rollback (`409`) | Anggap revert penuh sebagai pembatalan di `ActiveExecutions` |
+
+Sudah diperbaiki: cancel saat `queued` (202, worker berhenti sebelum chunk pertama), revert penuh melepas slot aktif, dan revert tanpa checkpoint ditolak `409`.
 
 ## Menjalankan
 

@@ -49,7 +49,23 @@ func ActiveExecutions(history []Execution) []Execution {
 
 // Spec: rollback hanya untuk migration aktif terakhir yang reversible.
 func RollbackTarget(migrationID string, reversible bool, history []Execution) (Execution, error) {
+	return RollbackTargetExcluding(migrationID, reversible, history, nil)
+}
+
+// RollbackTargetExcluding mengabaikan migration yang sudah dibatalkan penuh
+// (batch reverted) saat menentukan migration aktif terakhir, karena perubahannya
+// sudah tidak berlaku walaupun eksekusi up-nya tetap ada di riwayat.
+func RollbackTargetExcluding(migrationID string, reversible bool, history []Execution, excluded map[string]bool) (Execution, error) {
 	active := ActiveExecutions(history)
+	if len(excluded) > 0 {
+		filtered := make([]Execution, 0, len(active))
+		for _, e := range active {
+			if !excluded[e.MigrationID] {
+				filtered = append(filtered, e)
+			}
+		}
+		active = filtered
+	}
 
 	idx := -1
 	for i, e := range active {

@@ -374,6 +374,35 @@ func (e *Engine) revertBatch(ctx context.Context, spec attemptSpec, m *models.Mi
 	return res
 }
 
+// CheckRevertSafe memastikan checkpoint batch ada dan setiap chunk committed
+// punya SQL down. Spek: bila pembatalan tidak aman, tolak dan minta migration
+// perbaikan baru, jangan menjalankan kompensasi yang tidak bisa dipertanggungjawabkan.
+func (e *Engine) CheckRevertSafe(ctx context.Context, connectionID, migrationID string) error {
+	var m models.Migration
+	if err := e.db.WithContext(ctx).First(&m, "id = ? AND connection_id = ?", migrationID, connectionID).Error; err != nil {
+		return ErrMigrationNotFound
+	}
+	if m.BatchStatus == "reverted" {
+		return fmt.Errorf("%w: batch sudah dibatalkan", ErrRevertUnsafe)
+	}
+	if m.BatchRunID == nil {
+		return fmt.Errorf("%w: belum ada checkpoint", ErrRevertUnsafe)
+	}
+	pool, err := e.pools.Pool(ctx, connectionID)
+	if err != nil {
+		return err
+	}
+	var chunks, missing int64
+	err = pool.QueryRow(ctx, `SELECT count(*), count(*) FILTER (WHERE btrim(down_sql) = '') FROM _dbmp.batch_chunks WHERE run_id = $1`, *m.BatchRunID).Scan(&chunks, &missing)
+	if err != nil {
+		return fmt.Errorf("%w: checkpoint tidak dapat dibaca", ErrRevertUnsafe)
+	}
+	if chunks == 0 || missing > 0 {
+		return fmt.Errorf("%w: tidak ada chunk committed dengan SQL down", ErrRevertUnsafe)
+	}
+	return nil
+}
+
 // RevertBatch membalik seluruh chunk committed dari migration batch yang sukses
 // atau partial. Dipakai untuk pembatalan setelah batch selesai.
 func (e *Engine) RevertBatch(ctx context.Context, connectionID, migrationID, actor string) (*models.Migration, error) {
@@ -391,6 +420,9 @@ func (e *Engine) RevertBatch(ctx context.Context, connectionID, migrationID, act
 	}
 	if m.BatchSize <= 0 || m.BatchRunID == nil || (m.Status != models.MigrationSuccess && m.Status != models.MigrationPartial) {
 		return nil, ErrNotExecutable
+	}
+	if err := e.CheckRevertSafe(ctx, connectionID, migrationID); err != nil {
+		return nil, err
 	}
 	pool, err := e.pools.Pool(ctx, connectionID)
 	if err != nil {

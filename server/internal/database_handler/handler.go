@@ -328,14 +328,25 @@ func (h *Handler) CancelBatchMigration(c *fiber.Ctx) error {
 	if m.BatchSize <= 0 {
 		return httpx.ValidationError(c, "batch_size", "migration is not a batch migration")
 	}
-	// Batch yang masih berjalan dihentikan dulu di batas potongan. Revert
-	// dilakukan lewat change request + queue setelah berhenti.
-	if m.BatchStatus == "running" {
+	// Job yang belum selesai (queued/running) dihentikan di batas potongan lewat
+	// flag cancel; worker yang mengambil job akan berhenti sebelum chunk pertama.
+	var active int64
+	if err := h.db.WithContext(c.UserContext()).Model(&models.MigrationJob{}).
+		Where("migration_id = ? AND status IN ?", m.ID, []string{string(models.JobQueued), string(models.JobRunning)}).
+		Count(&active).Error; err != nil {
+		return h.writeError(c, err)
+	}
+	if active > 0 || m.BatchStatus == "running" {
 		if err := h.db.WithContext(c.UserContext()).Model(&models.Migration{}).
 			Where("id = ?", m.ID).Update("batch_cancel_requested", true).Error; err != nil {
 			return h.writeError(c, err)
 		}
 		return c.Status(fiber.StatusAccepted).JSON(fiber.Map{"status": "stop_requested"})
+	}
+	// Tidak ada job aktif: ini pembatalan batch yang sudah committed, jadi harus
+	// lewat change request revert. Tolak lebih awal kalau checkpoint tidak aman.
+	if err := h.engine.CheckRevertSafe(c.UserContext(), conn.ID, m.ID); err != nil {
+		return h.writeError(c, err)
 	}
 	cr, err := h.review.Submit(c.UserContext(), authctx.UserID(c), conn.ID, m.ID, models.JobKindRevert)
 	if err != nil {
@@ -375,6 +386,9 @@ func (h *Handler) RevertBatchMigration(c *fiber.Ctx) error {
 	}
 	if m.BatchSize <= 0 || m.BatchRunID == nil {
 		return httpx.ValidationError(c, "batch_size", "migration is not a batch migration")
+	}
+	if err := h.engine.CheckRevertSafe(c.UserContext(), conn.ID, m.ID); err != nil {
+		return h.writeError(c, err)
 	}
 	cr, err := h.review.Submit(c.UserContext(), authctx.UserID(c), conn.ID, m.ID, models.JobKindRevert)
 	if err != nil {
@@ -566,6 +580,8 @@ func (h *Handler) writeError(c *fiber.Ctx, err error) error {
 		return httpx.Error(c, fiber.StatusBadRequest, err.Error())
 	case errors.Is(err, review.ErrMigrationNotFound), errors.Is(err, review.ErrRequestNotFound):
 		return httpx.Error(c, fiber.StatusNotFound, err.Error())
+	case errors.Is(err, engine.ErrRevertUnsafe):
+		return httpx.Error(c, fiber.StatusConflict, err.Error())
 	case errors.Is(err, review.ErrSelfApproval), errors.Is(err, review.ErrNotRevertible):
 		return httpx.Error(c, fiber.StatusConflict, err.Error())
 	case errors.Is(err, review.ErrNotLeader), errors.Is(err, review.ErrEditAccessRequired):

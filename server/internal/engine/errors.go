@@ -12,6 +12,7 @@ var (
 	ErrJobActive         = errors.New("migration already has a queued or running job")
 	ErrInvalidKind       = errors.New("unknown job kind")
 	ErrIrreversible      = errors.New("migration is irreversible")
+	ErrRevertUnsafe      = errors.New("pembatalan tidak aman: checkpoint batch tidak lengkap, buat migration perbaikan baru")
 	ErrRollbackTarget    = errors.New("rollback_of must be a successful execution of this migration")
 	ErrJobNotFound       = errors.New("job not found")
 )

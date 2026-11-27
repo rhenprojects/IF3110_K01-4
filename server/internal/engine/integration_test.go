@@ -939,3 +939,44 @@ func TestIntegrationChunkedMigrationRevertAfterSuccess(t *testing.T) {
 		t.Fatalf("rows not reverted: wrong=%d err=%v", wrong, err)
 	}
 }
+
+// Revert hanya aman kalau checkpoint chunk dengan SQL down tersedia.
+func TestIntegrationCheckRevertSafe(t *testing.T) {
+	f := setup(t)
+	rows := f.s() + ".safe_rows"
+	f.execTarget(`CREATE TABLE `+rows+` (id bigint PRIMARY KEY, val int NOT NULL DEFAULT 0)`,
+		`INSERT INTO `+rows+` (id) SELECT g FROM generate_series(1, 500) g`)
+	up := `UPDATE ` + rows + ` SET val = val + 1 WHERE id IN (SELECT id FROM ` + rows + ` WHERE id > :last_id ORDER BY id LIMIT :batch_size)`
+	down := `UPDATE ` + rows + ` SET val = val - 1 WHERE id >= :from_id AND id <= :to_id`
+	m := f.migration(f.connID, "safe revert", up, down)
+	if err := f.db.Model(&models.Migration{}).Where("id = ?", m.ID).Update("batch_size", 100).Error; err != nil {
+		t.Fatal(err)
+	}
+	eng := f.engine()
+	t.Cleanup(eng.Start(1))
+	if job := f.waitJob(f.enqueue(eng, f.connID, m.ID, models.JobKindUp, "").ID); job.Status != models.JobSuccess {
+		t.Fatalf("job = %+v", job)
+	}
+	if err := eng.CheckRevertSafe(context.Background(), f.connID, m.ID); err != nil {
+		t.Fatalf("batch dengan checkpoint lengkap harus aman: %v", err)
+	}
+
+	// Checkpoint tidak ada (run id karangan) -> tidak aman.
+	fake := f.migration(f.connID, "no checkpoint", up, down)
+	if err := f.db.Model(&models.Migration{}).Where("id = ?", fake.ID).Updates(map[string]any{
+		"batch_size": 100, "status": models.MigrationPartial, "batch_run_id": uuid.NewString(),
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.CheckRevertSafe(context.Background(), f.connID, fake.ID); !errors.Is(err, engine.ErrRevertUnsafe) {
+		t.Fatalf("error = %v, mau ErrRevertUnsafe", err)
+	}
+
+	// Sudah dibatalkan penuh -> tidak boleh dibatalkan lagi.
+	if err := f.db.Model(&models.Migration{}).Where("id = ?", m.ID).Update("batch_status", "reverted").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.CheckRevertSafe(context.Background(), f.connID, m.ID); !errors.Is(err, engine.ErrRevertUnsafe) {
+		t.Fatalf("revert kedua: error = %v, mau ErrRevertUnsafe", err)
+	}
+}

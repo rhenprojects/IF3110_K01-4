@@ -227,3 +227,18 @@ func TestRollbackTarget(t *testing.T) {
 		})
 	}
 }
+
+// Batch yang di-revert penuh tidak lagi menahan rollback migration sebelumnya.
+func TestRollbackTargetExcludingReverted(t *testing.T) {
+	history := []Execution{
+		{ID: "E1", MigrationID: "A", Kind: KindUp, Status: StatusSuccess},
+		{ID: "E2", MigrationID: "B", Kind: KindUp, Status: StatusSuccess},
+	}
+	if _, err := RollbackTarget("A", true, history); !errors.Is(err, ErrNotLastActive) {
+		t.Fatalf("tanpa pengecualian: error = %v, mau ErrNotLastActive", err)
+	}
+	got, err := RollbackTargetExcluding("A", true, history, map[string]bool{"B": true})
+	if err != nil || got.ID != "E1" {
+		t.Fatalf("dengan pengecualian: got %+v err %v, mau E1", got, err)
+	}
+}
