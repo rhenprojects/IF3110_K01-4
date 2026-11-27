@@ -1,6 +1,6 @@
 import { Link, useNavigate } from "react-router-dom";
 import { useMigrations } from "../../features/databases/hooks";
-import { Button, EmptyState, Loading, PageHeader, Table, td } from "../../components/ui";
+import { Badge, Button, EmptyState, Loading, PageHeader, Table, td } from "../../components/ui";
 import { fmtDate, fmtDuration } from "../../lib/format";
 import type { Migration, MigrationStatus } from "../../lib/types";
 import { StateError, StatusBadge, canEdit, useDb } from "./shared";
@@ -28,6 +28,7 @@ export default function MigrationList() {
       <PageHeader title="Riwayat migration" action={add} />
       <p className="mb-4 text-sm text-slate-500">
         Riwayat bersifat linear: nomor versi hanya diberikan pada migration yang berhasil di-commit, berurutan tanpa lompatan.
+        Migration dengan <b>Batch size &gt; 0</b> diberi tanda <b>Batch</b>; buka detailnya untuk melihat progres per potongan.
       </p>
       {q.isLoading && <Loading />}
       {q.error && <StateError error={q.error} onRetry={() => q.refetch()} />}
@@ -40,7 +41,12 @@ export default function MigrationList() {
           {q.data.map((m) => (
             <tr key={m.id}>
               <td className={`${td} font-mono`}>{m.version ? `v${m.version}` : "—"}</td>
-              <td className={td}><Link to={`/databases/${db.id}/migrations/${m.id}`} className="font-medium underline-offset-2 hover:underline">{m.name}</Link></td>
+              <td className={td}>
+                <span className="flex flex-wrap items-center gap-2">
+                  <Link to={`/databases/${db.id}/migrations/${m.id}`} className="font-medium underline-offset-2 hover:underline">{m.name}</Link>
+                  {m.batch_size > 0 && <Badge tone="dark">Batch {m.batch_size.toLocaleString("id-ID")}</Badge>}
+                </span>
+              </td>
               <td className={td}><StatusBadge status={m.status} /></td>
               <td className={td}>{m.created_by_name}<span className="block text-xs text-slate-400">{fmtDate(m.created_at)}</span></td>
               <td className={td}>
