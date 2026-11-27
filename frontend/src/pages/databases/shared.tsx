@@ -56,7 +56,7 @@ export function JobStatusBadge({ status }: { status: JobStatus }) {
 export const KIND_LABEL: Record<JobKind, string> = { up: "Up", rollback: "Rollback", forward: "Forward", revert: "Revert batch" };
 
 //[badge] jenis eksekusi: rollback diberi warna peringatan agar mudah dibedakan di daftar
-const KIND_TONE: Record<JobKind, "neutral" | "amber" | "dark"> = { up: "neutral", rollback: "amber", forward: "dark" };
+const KIND_TONE: Record<JobKind, "neutral" | "amber" | "dark"> = { up: "neutral", rollback: "amber", forward: "dark", revert: "amber" };
 export function KindBadge({ kind }: { kind: JobKind }) {
   return <Badge tone={KIND_TONE[kind]}>{KIND_LABEL[kind]}</Badge>;
 }

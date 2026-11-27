@@ -3,7 +3,7 @@ import { useDatabase } from "../../features/databases/hooks";
 import { Banner, bannerTab as tab } from "../../components/Banner";
 import { DatabaseIcon } from "../../components/icons";
 import { Loading } from "../../components/ui";
-import { StateError } from "./shared";
+import { LevelBadge, StateError } from "./shared";
 
 //[layout] memuat info database + level efektif; 403/404/502 ditangani di sini sekali untuk semua sub-halaman
 export default function DatabaseLayout() {

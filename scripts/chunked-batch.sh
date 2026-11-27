@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Uji mode batch per potongan row lewat API penuh:
 # draft -> change request -> approval leader -> queue worker -> checkpoint target.
+# Harus jalan sebagai leader semua group yang punya akses ke database target,
+# karena approve dan mode batch hanya boleh dilakukan leader.
 set -euo pipefail
 
 BASE_URL="${BASE_URL:-http://localhost:9000/api/v1}"
@@ -54,6 +56,8 @@ echo "== Seed $ROWS row di $TARGET_DB =="
 docker exec -i "$PG_CONTAINER" psql -U postgres -d "$TARGET_DB" -v ON_ERROR_STOP=1 -q <<SQL
 DROP TABLE IF EXISTS batch_bench;
 CREATE TABLE batch_bench (id bigint PRIMARY KEY, payload text NOT NULL);
+-- Tabel dibuat oleh postgres, padahal worker migration jalan sebagai role koneksi (duren).
+ALTER TABLE batch_bench OWNER TO ${PG_USER:-duren};
 INSERT INTO batch_bench (id, payload) SELECT g, repeat('x', 50) FROM generate_series(1, $ROWS) g;
 SQL
 
@@ -81,11 +85,18 @@ code=$(call POST "/databases/$DB_ID/change-requests/$CRID/approve" '{"comment":"
 [ "$code" = "200" ] || { echo "gagal approve (pastikan admin leader semua group): $(cat "$BODY")" >&2; exit 1; }
 
 START=$(date +%s%N)
+DEADLINE=$((SECONDS + ${WAIT_TIMEOUT:-300}))
 while :; do
 	call GET "/databases/$DB_ID/migrations/$MID" >/dev/null
 	status=$(jget status); batch=$(jget batch_status); rows=$(jget batch_rows); chunks=$(jget batch_chunks)
 	printf '\r  status=%s batch=%s rows=%s chunks=%s' "$status" "$batch" "$rows" "$chunks"
 	case "$status" in success|failed|partial) break ;; esac
+	if [ "$SECONDS" -ge "$DEADLINE" ]; then
+		echo
+		echo "timeout ${WAIT_TIMEOUT:-300}s; job tidak jalan. Cek migration lain berstatus partial di database ini (memblokir queue):" >&2
+		echo "  GET /databases/$DB_ID/migrations -> revert dulu yang partial" >&2
+		exit 1
+	fi
 	sleep 0.3
 done
 END=$(date +%s%N)

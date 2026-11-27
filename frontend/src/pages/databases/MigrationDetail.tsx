@@ -9,7 +9,7 @@ import { DataList, type Column } from "../../components/DataList";
 import { Badge, Button, ConfirmDialog, ErrorBox, Loading, generalError } from "../../components/ui";
 import { useToast } from "../../components/toast";
 import { fmtDate, fmtDuration, isDestructive } from "../../lib/format";
-import type { ChangeRequest, JobKind, MigrationExecution, MigrationJob } from "../../lib/types";
+import type { ChangeRequest, JobKind, MigrationExecution, MigrationJob, MigrationStatus } from "../../lib/types";
 import { BackLink, JobStatusBadge, KIND_LABEL, StateError, StatusBadge, canEdit, useDb } from "./shared";
 
 //[queue] status job terbaru migration ini; dipolling sampai success/failed
@@ -64,6 +64,8 @@ function ReviewPanel({ cr, onDispatch, dispatching }: { cr: ChangeRequest; onDis
 
 //[stepper] posisi migration di alur Draft → Review → Queue → Selesai/Gagal
 const STEPS = ["Draft", "Review", "Queue", "Selesai"];
+//[stepper] partial = batch berhenti di checkpoint, jadi masih di tahap Queue
+const STEP: Record<MigrationStatus, number> = { draft: 0, pending_review: 1, approved: 2, partial: 2, success: 3, failed: 3 };
 function Stepper({ step, failed }: { step: number; failed: boolean }) {
   return (
     <ol aria-label="Alur migration" className="flex items-center text-sm">
@@ -137,7 +139,7 @@ export default function MigrationDetail() {
   const waiting = cr?.status === "pending_review" || (cr?.status === "approved" && !cr.job_id);
   const jobBusy = !!job && (job.status === "queued" || job.status === "running" || job.status === "uncertain");
   const busy = waiting || jobBusy;
-  const step = jobBusy ? 2 : waiting ? 1 : { draft: 0, pending_review: 1, approved: 2, success: 3, failed: 3 }[m.status];
+  const step = jobBusy ? 2 : waiting ? 1 : STEP[m.status];
   //[rollback] rollback sukses tidak mengubah baris migration, jadi keadaan "dibatalkan" dibaca dari riwayat eksekusi
   const lastOk = [...(history.data ?? [])].sort((a, z) => z.id - a.id).find((x) => x.status === "success");
   const rolledBack = m.status === "success" && lastOk?.kind === "rollback";
