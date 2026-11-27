@@ -7,7 +7,7 @@ test("login dan halaman admin users", async ({ page }) => {
   });
 
   await page.goto("/login");
-  await expect(page.getByRole("heading", { name: "Masuk" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Selamat datang kembali" })).toBeVisible();
   await page.getByLabel("Username").fill("admin");
   await page.getByLabel("Password").fill("admin-password");
   await page.getByRole("button", { name: "Masuk" }).click();
