@@ -51,6 +51,14 @@ export const useCancelBatchMigration = (id: string) => {
   });
 };
 
+export const useRevertBatchMigration = (id: string) => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (mid: string) => api(`${base(id)}/migrations/${enc(mid)}/batch/revert`, { method: "POST" }),
+    onSettled: () => qc.invalidateQueries({ queryKey: ["db", id], predicate: (q) => q.queryKey[2] === "migrations" }),
+  });
+};
+
 export const useResumeBatchMigration = (id: string) => {
   const qc = useQueryClient();
   return useMutation({

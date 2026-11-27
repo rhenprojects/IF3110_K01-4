@@ -3,6 +3,7 @@ package userhandler
 import (
 	"errors"
 	"log"
+	"net"
 	"strconv"
 	"strings"
 	"web_backend/internal/audit"
@@ -51,14 +52,27 @@ func (h *UserHandler) CreateUser(c *fiber.Ctx) error {
 	return c.Status(fiber.StatusCreated).JSON(user)
 }
 
+func clientIP(c *fiber.Ctx) string {
+	if ip := strings.TrimSpace(c.Get("X-Real-IP")); ip != "" {
+		return ip
+	}
+	if addr := c.Context().RemoteAddr(); addr != nil {
+		if host, _, err := net.SplitHostPort(addr.String()); err == nil {
+			return host
+		}
+		return addr.String()
+	}
+	return c.IP()
+}
+
 func (h *UserHandler) Login(c *fiber.Ctx) error {
 	var req models.LoginRequest
 	if err := c.BodyParser(&req); err != nil {
 		return httpx.Error(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 	username := strings.TrimSpace(req.Username)
-	limitKey := strings.ToLower(username) + "|" + c.IP()
-	ipKey := c.IP()
+	limitKey := strings.ToLower(username) + "|" + clientIP(c)
+	ipKey := clientIP(c)
 	if allowed, retry := h.loginLimiter.allow(limitKey); !allowed {
 		c.Set(fiber.HeaderRetryAfter, strconv.Itoa(int(retry.Seconds())+1))
 		return httpx.Error(c, fiber.StatusTooManyRequests, "too many failed login attempts, try again later")
@@ -76,12 +90,12 @@ func (h *UserHandler) Login(c *fiber.Ctx) error {
 	if !CheckPassword(user.Password, req.Password) {
 		h.loginLimiter.fail(limitKey)
 		h.ipLimiter.fail(ipKey)
-		audit.Log(h.DB, "", "login_failed", "user", username, c.IP(), "invalid credentials")
+		audit.Log(h.DB, "", "login_failed", "user", username, clientIP(c), "invalid credentials")
 		return httpx.Error(c, fiber.StatusUnauthorized, "Invalid username or password")
 	}
 	h.loginLimiter.reset(limitKey)
 	h.ipLimiter.reset(ipKey)
-	audit.Log(h.DB, user.ID, "login", "user", user.ID, c.IP(), "")
+	audit.Log(h.DB, user.ID, "login", "user", user.ID, clientIP(c), "")
 
 	if _, _, err := h.Sessions.Create(c, user.ID); err != nil {
 		log.Printf("[user] create session failed: %v", err)

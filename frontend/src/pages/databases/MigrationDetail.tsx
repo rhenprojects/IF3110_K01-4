@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   useCancelBatchMigration, useChangeRequests, useDispatchChangeRequest, useJob, useJobs, useMigration, useMigrationExecutions,
-  useResumeBatchMigration, useSubmitChangeRequest,
+  useResumeBatchMigration, useRevertBatchMigration, useSubmitChangeRequest,
 } from "../../features/databases/hooks";
 import { Badge, Button, ConfirmDialog, ErrorBox, Loading, Table, generalError, td } from "../../components/ui";
 import { useToast } from "../../components/toast";
@@ -99,6 +99,7 @@ export default function MigrationDetail() {
   const history = useMigrationExecutions(db.id, mid);
   const cancelBatch = useCancelBatchMigration(db.id);
   const resumeBatch = useResumeBatchMigration(db.id);
+  const revertBatch = useRevertBatchMigration(db.id);
   const [confirm, setConfirm] = useState<JobKind | null>(null);
 
   //[review] pengajuan terbaru untuk migration ini
@@ -193,11 +194,16 @@ export default function MigrationDetail() {
                 Lanjutkan dari checkpoint
               </Button>
             )}
+            {(m.status === "success" || m.status === "partial") && !m.batch_cancel_requested && (
+              <Button variant="danger" onClick={() => revertBatch.mutate(m.id)} disabled={revertBatch.isPending}>
+                Revert batch
+              </Button>
+            )}
           </div>
         </section>
       )}
 
-      <ErrorBox message={generalError(cancelBatch.error, []) ?? generalError(resumeBatch.error, [])} />
+      <ErrorBox message={generalError(cancelBatch.error, []) ?? generalError(resumeBatch.error, []) ?? generalError(revertBatch.error, [])} />
 
       <dl className="grid gap-3 text-sm sm:grid-cols-3">
         {meta.map(([k, v]) => (

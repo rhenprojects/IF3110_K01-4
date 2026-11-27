@@ -44,6 +44,7 @@ INSERT INTO big_table (id) SELECT g FROM generate_series(1, 50000) g;"
 
 - Saat batch berjalan, klik **Batalkan & revert**. Worker berhenti di batas potongan, menjalankan SQL down dari chunk terakhir, dan status menjadi `reverted`/`partially_reverted` (migration `partial`).
 - Setelah berhenti, klik **Lanjutkan dari checkpoint**. Worker melanjutkan dari cursor terakhir.
+- Setelah batch sukses, klik **Revert batch** untuk menjalankan SQL down seluruh chunk dari yang terakhir dan menandai migration `partial`/`reverted`.
 
 ## Dataset besar
 

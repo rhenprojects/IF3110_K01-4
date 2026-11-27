@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"gorm.io/gorm"
 )
 
 const (
@@ -342,6 +343,53 @@ func (e *Engine) revertBatch(ctx context.Context, spec attemptSpec, m *models.Mi
 	res.finished = e.now()
 	observability.ObserveBatch("cancelled", res.finished.Sub(res.started))
 	return res
+}
+
+// RevertBatch membalik seluruh chunk committed dari migration batch yang sukses
+// atau partial. Dipakai untuk pembatalan setelah batch selesai.
+func (e *Engine) RevertBatch(ctx context.Context, connectionID, migrationID, actor string) (*models.Migration, error) {
+	release, ok, err := e.locker.TryLock(ctx, connectionID)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, ErrJobActive
+	}
+	defer release()
+	var m models.Migration
+	if err := e.db.WithContext(ctx).First(&m, "id = ? AND connection_id = ?", migrationID, connectionID).Error; err != nil {
+		return nil, ErrMigrationNotFound
+	}
+	if m.BatchSize <= 0 || m.BatchRunID == nil || (m.Status != models.MigrationSuccess && m.Status != models.MigrationPartial) {
+		return nil, ErrNotExecutable
+	}
+	pool, err := e.pools.Pool(ctx, connectionID)
+	if err != nil {
+		return nil, err
+	}
+	spec := attemptSpec{
+		executionID: uuid.NewString(), connectionID: connectionID, migrationID: migrationID,
+		kind: models.JobKindRollback, executedBy: actor,
+	}
+	res := e.revertBatch(ctx, spec, &m, pool, *m.BatchRunID)
+	if res.batchStatus != "reverted" && res.batchStatus != "partially_reverted" {
+		return nil, errors.New(res.errMsg)
+	}
+	err = e.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if _, err := e.applyToMigration(tx, &m, models.JobKindRollback, actor, res, true); err != nil {
+			return err
+		}
+		record := newExecutionRecord(spec, &m, res, m.Version, nil)
+		return tx.Create(&record).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+	var updated models.Migration
+	if err := e.db.WithContext(ctx).First(&updated, "id = ?", migrationID).Error; err != nil {
+		return nil, err
+	}
+	return &updated, nil
 }
 
 func (e *Engine) EnqueueResume(ctx context.Context, connectionID, migrationID, requestedBy string) (*models.MigrationJob, error) {

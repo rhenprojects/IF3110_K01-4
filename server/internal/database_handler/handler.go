@@ -85,6 +85,7 @@ func (h *Handler) RegisterRoutes(router fiber.Router) {
 	g.Post("/:id/migrations/:mid/change-requests", h.SubmitChangeRequest)
 	g.Post("/:id/migrations/:mid/batch/cancel", h.CancelBatchMigration)
 	g.Post("/:id/migrations/:mid/batch/resume", h.ResumeBatchMigration)
+	g.Post("/:id/migrations/:mid/batch/revert", h.RevertBatchMigration)
 	g.Get("/:id/change-requests", h.ListChangeRequests)
 	g.Post("/:id/change-requests/:rid/approve", h.ApproveChangeRequest)
 	g.Post("/:id/change-requests/:rid/reject", h.RejectChangeRequest)
@@ -344,6 +345,25 @@ func (h *Handler) ResumeBatchMigration(c *fiber.Ctx) error {
 		return h.writeError(c, err)
 	}
 	return c.Status(fiber.StatusAccepted).JSON(job)
+}
+
+func (h *Handler) RevertBatchMigration(c *fiber.Ctx) error {
+	conn, _, err := h.accessible(c, true)
+	if err != nil {
+		return h.writeError(c, err)
+	}
+	m, err := h.findMigration(c, conn.ID, c.Params("mid"))
+	if err != nil {
+		return h.writeError(c, err)
+	}
+	if m.BatchSize <= 0 || m.BatchRunID == nil {
+		return httpx.ValidationError(c, "batch_size", "migration is not a batch migration")
+	}
+	updated, err := h.engine.RevertBatch(c.UserContext(), conn.ID, m.ID, authctx.UserID(c))
+	if err != nil {
+		return h.writeError(c, err)
+	}
+	return c.JSON(updated)
 }
 
 func (h *Handler) ListJobs(c *fiber.Ctx) error {

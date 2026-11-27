@@ -2,6 +2,7 @@ package audit
 
 import (
 	"log"
+	"net"
 	"strconv"
 	"strings"
 
@@ -14,6 +15,19 @@ import (
 
 // Middleware mencatat setiap request mutasi yang berhasil melewati autentikasi.
 // Body tidak dicatat agar password/token tidak masuk audit.
+func clientIP(c *fiber.Ctx) string {
+	if ip := strings.TrimSpace(c.Get("X-Real-IP")); ip != "" {
+		return ip
+	}
+	if addr := c.Context().RemoteAddr(); addr != nil {
+		if host, _, err := net.SplitHostPort(addr.String()); err == nil {
+			return host
+		}
+		return addr.String()
+	}
+	return c.IP()
+}
+
 func Middleware(db *gorm.DB) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		err := c.Next()
@@ -27,7 +41,7 @@ func Middleware(db *gorm.DB) fiber.Handler {
 		}
 		entry := models.AuditLog{
 			ActorID: authctx.UserID(c), Action: method + " " + path,
-			TargetType: "http", TargetID: path, IP: c.IP(),
+			TargetType: "http", TargetID: path, IP: clientIP(c),
 			Detail: "status=" + strconv.Itoa(c.Response().StatusCode()),
 		}
 		if e := db.WithContext(c.UserContext()).Create(&entry).Error; e != nil {

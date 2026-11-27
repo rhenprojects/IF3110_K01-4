@@ -455,6 +455,7 @@ Izin:
 | `PUT /databases/:id/migrations/:mid` | Ubah draft. Body sama seperti `POST`. Response `200`. `409` kalau statusnya bukan `draft` |
 | `POST /databases/:id/migrations/:mid/batch/cancel` | Minta worker berhenti di batas potongan lalu menjalankan SQL down terbalik. Response `202`; `400` kalau bukan batch |
 | `POST /databases/:id/migrations/:mid/batch/resume` | Lanjutkan batch dari checkpoint terakhir dan masukkan job baru ke queue. Response `202` + job; `409` kalau tidak ada checkpoint |
+| `POST /databases/:id/migrations/:mid/batch/revert` | Setelah batch sukses/partial, jalankan SQL down untuk semua chunk committed dari yang terakhir. Response `200` + Migration; `409` kalau bukan batch |
 
 Aturan input `POST` dan `PUT`: `name` wajib, maksimal 200 karakter. `sql` wajib, tidak boleh kosong. `sql_down` wajib kecuali `irreversible=true`. `batch_size` 0–1.000.000.
 

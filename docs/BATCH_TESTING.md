@@ -77,7 +77,7 @@ curl -b cookies.txt -H "X-CSRF-Token: $CSRF" -X POST \
 
 - Cancel: chunk committed dibalik dari yang terakhir. Hasil `batch_status=reverted` (semua) atau `partially_reverted` (sebagian); migration menjadi `partial`.
 - Resume: worker membaca `_dbmp.batch_runs.cursor_id` dan melanjutkan; tidak mengulang chunk yang sudah committed.
-- Cancel setelah batch selesai penuh belum didukung; gunakan migration baru dengan SQL down yang sesuai.
+- Cancel setelah batch selesai penuh memakai `POST /migrations/:mid/batch/revert`; endpoint ini berjalan sinkron dan menjalankan SQL down untuk semua chunk dari yang terakhir.
 
 ## 6. Observability
 

@@ -848,3 +848,32 @@ func TestIntegrationChunkedMigrationResumesFromTargetCheckpoint(t *testing.T) {
 		t.Fatalf("rows not resumed consistently: wrong=%d err=%v", wrong, err)
 	}
 }
+
+func TestIntegrationChunkedMigrationRevertAfterSuccess(t *testing.T) {
+	f := setup(t)
+	f.execTarget(`CREATE TABLE ` + f.s() + `.batch_revert_rows (id bigint PRIMARY KEY, val int NOT NULL DEFAULT 0)`)
+	f.execTarget(`INSERT INTO ` + f.s() + `.batch_revert_rows (id) SELECT g FROM generate_series(1, 1500) g`)
+	up := `UPDATE ` + f.s() + `.batch_revert_rows SET val = val + 1
+		WHERE id IN (SELECT id FROM ` + f.s() + `.batch_revert_rows WHERE id > :last_id ORDER BY id LIMIT :batch_size)`
+	down := `UPDATE ` + f.s() + `.batch_revert_rows SET val = val - 1 WHERE id >= :from_id AND id <= :to_id`
+	m := f.migration(f.connID, "chunked revert", up, down)
+	if err := f.db.Model(&models.Migration{}).Where("id = ?", m.ID).Update("batch_size", 500).Error; err != nil {
+		t.Fatal(err)
+	}
+	eng := f.engine()
+	t.Cleanup(eng.Start(1))
+	if done := f.waitJob(f.enqueue(eng, f.connID, m.ID, models.JobKindUp, "").ID); done.Status != models.JobSuccess {
+		t.Fatalf("job = %+v", done)
+	}
+	got, err := eng.RevertBatch(context.Background(), f.connID, m.ID, f.userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != models.MigrationPartial || got.BatchStatus != "reverted" || got.BatchRows != 0 || got.BatchChunks != 0 {
+		t.Fatalf("migration after revert = %+v", got)
+	}
+	var wrong int
+	if err := f.target.QueryRow(context.Background(), `SELECT count(*) FROM `+f.s()+`.batch_revert_rows WHERE val <> 0`).Scan(&wrong); err != nil || wrong != 0 {
+		t.Fatalf("rows not reverted: wrong=%d err=%v", wrong, err)
+	}
+}
