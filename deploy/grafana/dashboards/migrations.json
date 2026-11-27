@@ -103,7 +103,7 @@
     },
     {
       "type": "stat",
-      "title": "Total batch",
+      "title": "Batch selesai (rentang)",
       "gridPos": {
         "h": 5,
         "w": 8,
@@ -116,14 +116,14 @@
       },
       "targets": [
         {
-          "expr": "sum(migration_batch_total) or vector(0)",
+          "expr": "sum(increase(migration_batch_total[$__range])) or vector(0)",
           "instant": true
         }
       ]
     },
     {
       "type": "stat",
-      "title": "Batch gagal + sebagian",
+      "title": "Batch gagal + sebagian (rentang)",
       "gridPos": {
         "h": 5,
         "w": 8,
@@ -136,14 +136,14 @@
       },
       "targets": [
         {
-          "expr": "sum(migration_batch_total{status=~\"failed|partial\"}) or vector(0)",
+          "expr": "sum(increase(migration_batch_total{status=~\"failed|partial\"}[$__range])) or vector(0)",
           "instant": true
         }
       ]
     },
     {
       "type": "stat",
-      "title": "Item sukses",
+      "title": "Item sukses (rentang)",
       "gridPos": {
         "h": 5,
         "w": 8,
@@ -156,7 +156,7 @@
       },
       "targets": [
         {
-          "expr": "sum(migration_batch_items_total{status=\"success\"}) or vector(0)",
+          "expr": "sum(increase(migration_batch_items_total{status=\"success\"}[$__range])) or vector(0)",
           "instant": true
         }
       ]
