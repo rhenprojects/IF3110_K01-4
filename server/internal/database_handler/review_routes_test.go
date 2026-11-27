@@ -1,6 +1,7 @@
 package databasehandler_test
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"web_backend/internal/models"
@@ -53,6 +54,83 @@ func (e *env) approveAndWait(cr models.ChangeRequest, leaderA, leaderB string) m
 		e.t.Fatalf("approve leader B: status %d body %s", status, raw)
 	}
 	return e.waitJob(*got.JobID)
+}
+
+func TestIntegrationBatchResumeRequiresApproval(t *testing.T) {
+	e := setup(t)
+	leaderA, leaderB := e.assignLeaders()
+	rows := pgx.Identifier{e.schema, "resume_rows"}.Sanitize()
+	gate := pgx.Identifier{e.schema, "resume_gate"}.Sanitize()
+	e.execTarget(
+		"CREATE TABLE "+rows+" (id bigint PRIMARY KEY, val int NOT NULL DEFAULT 0)",
+		"INSERT INTO "+rows+" (id) SELECT g FROM generate_series(1, 300) g",
+		"CREATE TABLE "+gate+" (open boolean NOT NULL)",
+		"INSERT INTO "+gate+" VALUES (false)",
+	)
+	up := "UPDATE " + rows + " SET val = val + 1 / (CASE WHEN id > 100 AND NOT (SELECT open FROM " + gate + ") THEN 0 ELSE 1 END)" +
+		" WHERE id IN (SELECT id FROM " + rows + " WHERE id > :last_id ORDER BY id LIMIT :batch_size)"
+	down := "UPDATE " + rows + " SET val = val - 1 WHERE id >= :from_id AND id <= :to_id"
+	var m models.Migration
+	if status, raw := e.do(e.editor, "POST", e.dbPath("migrations"),
+		map[string]any{"name": "resume batch", "sql": up, "sql_down": down, "batch_size": 100}, &m); status != fiber.StatusCreated {
+		t.Fatalf("create batch migration: status %d body %s", status, raw)
+	}
+	status, cr, raw := e.submit(e.editor, m.ID, models.JobKindUp)
+	if status != fiber.StatusCreated {
+		t.Fatalf("submit up: status %d body %s", status, raw)
+	}
+	if first := e.approveAndWait(cr, leaderA, leaderB); first.Status != models.JobFailed {
+		t.Fatalf("first run = %+v, want failed at second chunk", first)
+	}
+	reload := func() models.Migration {
+		var got models.Migration
+		if status, raw := e.do(e.viewer, "GET", e.dbPath("migrations", m.ID), nil, &got); status != fiber.StatusOK {
+			t.Fatalf("get migration: status %d body %s", status, raw)
+		}
+		return got
+	}
+	if got := reload(); got.Status != models.MigrationPartial || got.BatchRows != 100 || got.BatchChunks != 1 {
+		t.Fatalf("after failed chunk = %+v, want partial checkpoint at 100 rows", got)
+	}
+
+	e.execTarget("UPDATE " + gate + " SET open = true")
+	resumePath := e.dbPath("migrations", m.ID, "batch", "resume")
+	if status, raw := e.do(e.viewer, "POST", resumePath, nil, nil); status != fiber.StatusForbidden {
+		t.Errorf("viewer resume: status %d body %s, want 403", status, raw)
+	}
+	var resume models.ChangeRequest
+	if status, raw := e.do(e.editor, "POST", resumePath, nil, &resume); status != fiber.StatusCreated ||
+		resume.Status != models.ChangeRequestPendingReview || resume.Kind != models.JobKindUp || resume.JobID != nil {
+		t.Fatalf("resume: status %d body %s, want pending change request", status, raw)
+	}
+	var waiting int64
+	if err := e.db.Model(&models.MigrationJob{}).Where("migration_id = ? AND status IN ?", m.ID,
+		[]models.JobStatus{models.JobQueued, models.JobRunning}).Count(&waiting).Error; err != nil || waiting != 0 {
+		t.Fatalf("resume queued before approval: %d jobs, err %v", waiting, err)
+	}
+	if status, _ := e.do(e.editor, "POST", resumePath, nil, nil); status != fiber.StatusConflict {
+		t.Errorf("duplicate resume = %d, want 409", status)
+	}
+	if got := reload(); got.Status != models.MigrationPartial {
+		t.Errorf("status during review = %s, want partial", got.Status)
+	}
+
+	if done := e.approveAndWait(resume, leaderA, leaderB); done.Status != models.JobSuccess {
+		t.Fatalf("resumed job = %+v", done)
+	}
+	if got := reload(); got.Status != models.MigrationSuccess || got.BatchRows != 300 || got.BatchChunks != 3 {
+		t.Errorf("after resume = %+v, want success with 300 rows in 3 chunks", got)
+	}
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, e.dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+	var wrong int
+	if err := conn.QueryRow(ctx, "SELECT count(*) FROM "+rows+" WHERE val <> 1").Scan(&wrong); err != nil || wrong != 0 {
+		t.Errorf("rows updated more or less than once: %d, err %v", wrong, err)
+	}
 }
 
 func (e *env) history(hide bool) []models.MigrationExecution {
