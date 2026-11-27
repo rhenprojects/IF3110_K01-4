@@ -771,3 +771,31 @@ func TestIntegrationJobStatusEndpoints(t *testing.T) {
 		t.Errorf("bad job id: status %d, want 404", status)
 	}
 }
+
+// Tabel tanpa constraint/index (mis. CREATE TABLE AS) tidak boleh dikirim
+// sebagai null: klien memanggil .length pada array tersebut.
+func TestIntegrationSchemaReturnsEmptyArrays(t *testing.T) {
+	e := setup(t)
+	e.execTarget(fmt.Sprintf(`CREATE TABLE %q.%q AS SELECT 1 AS id`, e.schema, "plain_rows"))
+
+	var resp models.SchemaResponse
+	status, raw := e.do(e.viewer, "GET", e.dbPath("schema"), nil, &resp)
+	if status != fiber.StatusOK {
+		t.Fatalf("schema: status %d body %s", status, raw)
+	}
+	for _, schema := range resp.Schemas {
+		if schema.Name != e.schema {
+			continue
+		}
+		for _, table := range schema.Tables {
+			if table.Name != "plain_rows" {
+				continue
+			}
+			if table.Constraints == nil || table.Indexes == nil {
+				t.Fatalf("constraints/indexes null untuk tabel tanpa constraint: %+v", table)
+			}
+			return
+		}
+	}
+	t.Fatal("plain_rows tidak ada di response schema")
+}

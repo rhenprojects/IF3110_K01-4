@@ -264,9 +264,21 @@ func readTables(ctx context.Context, q querier, schema string) ([]models.SchemaT
 		if rel.Kind == "v" || rel.Kind == "m" {
 			tableType = "view"
 		}
+		// Tabel tanpa constraint/index (mis. hasil CREATE TABLE AS) tidak punya
+		// entri di map; kirim array kosong supaya klien tidak menerima null.
+		cols, cons, idxs := columns[rel.Name], constraints[rel.Name], indexes[rel.Name]
+		if cols == nil {
+			cols = []models.SchemaColumn{}
+		}
+		if cons == nil {
+			cons = []models.SchemaConstraint{}
+		}
+		if idxs == nil {
+			idxs = []models.SchemaIndex{}
+		}
 		tables = append(tables, models.SchemaTable{
 			Name: rel.Name, Type: tableType,
-			Columns: columns[rel.Name], Constraints: constraints[rel.Name], Indexes: indexes[rel.Name],
+			Columns: cols, Constraints: cons, Indexes: idxs,
 		})
 	}
 	return tables, nil

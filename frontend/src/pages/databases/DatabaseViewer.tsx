@@ -25,7 +25,7 @@ function Structure({ t }: { t: TableInfo }) {
         ))}
       </Table>
       <h3 className={h}>Constraint</h3>
-      {t.constraints.length === 0 ? <p className="text-sm text-slate-500">Tidak ada.</p> : (
+      {(t.constraints ?? []).length === 0 ? <p className="text-sm text-slate-500">Tidak ada.</p> : (
         <Table columns={["Nama", "Tipe", "Definisi"]}>
           {t.constraints.map((c) => (
             <tr key={c.name}><td className={td}>{c.name}</td><td className={td}>{c.type}</td><td className={`${td} ${code}`}>{c.definition}</td></tr>
@@ -33,7 +33,7 @@ function Structure({ t }: { t: TableInfo }) {
         </Table>
       )}
       <h3 className={h}>Index</h3>
-      {t.indexes.length === 0 ? <p className="text-sm text-slate-500">Tidak ada.</p> : (
+      {(t.indexes ?? []).length === 0 ? <p className="text-sm text-slate-500">Tidak ada.</p> : (
         <Table columns={["Nama", "Unik", "Definisi"]}>
           {t.indexes.map((i) => (
             <tr key={i.name}><td className={td}>{i.name}</td><td className={td}>{i.is_unique ? "ya" : "tidak"}</td><td className={`${td} ${code}`}>{i.definition}</td></tr>
