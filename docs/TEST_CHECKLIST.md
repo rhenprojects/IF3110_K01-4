@@ -62,3 +62,4 @@ sh scripts/invoker.sh test-all    # unit + integration + API smoke
 | 31 | SPA diuji di browser (login + admin users), CSP tidak memblokir | `frontend/e2e/smoke.spec.ts`, `npm run test:e2e` | PASS |
 | 32 | HTTPS lokal + HSTS | `https://localhost`, header `Strict-Transport-Security` | PASS |
 | 33 | Audit log login dan mutasi API | `GET /admin/audit`, tabel `audit_logs` | PASS |
+| 34 | Setujui banyak pengajuan sekaligus; tiap request tetap dinilai sendiri (leader, self-approval, queue) | `TestIntegrationBulkApproveChangeRequests`, `POST /databases/:id/change-requests/approve` | PASS |

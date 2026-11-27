@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { useDecideChangeRequest, usePendingReviews } from "../features/databases/hooks";
+import { useBulkApproveChangeRequests, useDecideChangeRequest, usePendingReviews } from "../features/databases/hooks";
 import { Banner, BannerStat } from "../components/Banner";
 import { DataList, type Column } from "../components/DataList";
 import { InboxIcon } from "../components/icons";
@@ -44,14 +44,45 @@ function ApprovalProgress({ reviewers }: { reviewers: Reviewer[] }) {
 export default function Reviews() {
   const q = usePendingReviews();
   const decide = useDecideChangeRequest();
+  const bulk = useBulkApproveChangeRequests();
   const toast = useToast();
   const [target, setTarget] = useState<{ cr: ChangeRequest; decision: Decision }>();
   const [comment, setComment] = useState("");
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkComment, setBulkComment] = useState("");
+  const [bulkFailed, setBulkFailed] = useState<string[]>([]);
 
   function open(cr: ChangeRequest, decision: Decision) {
     decide.reset();
     setComment("");
     setTarget({ cr, decision });
+  }
+
+  //[review] satu panggilan per database; hasil per pengajuan dikumpulkan supaya
+  // kegagalan sebagian tidak terlihat seperti sukses total
+  async function approveAll() {
+    if (!q.data) return;
+    const perDb = new Map<string, string[]>();
+    for (const cr of q.data) perDb.set(cr.connection_id, [...(perDb.get(cr.connection_id) ?? []), cr.id]);
+    const name = (id: string) => q.data?.find((c) => c.id === id)?.migration_name ?? id;
+    let approved = 0;
+    const failed: string[] = [];
+    try {
+      for (const [dbId, ids] of perDb) {
+        const res = await bulk.mutateAsync({ dbId, ids, comment: bulkComment.trim() });
+        for (const r of res.results) {
+          if (r.error) failed.push(`${name(r.id)}: ${r.error}`);
+          else approved++;
+        }
+      }
+    } catch {
+      //[error] kegagalan transport ditampilkan di modal lewat bulk.error
+      return;
+    }
+    setBulkFailed(failed);
+    setBulkComment("");
+    setBulkOpen(false);
+    if (approved > 0) toast.success(`${approved} pengajuan disetujui`);
   }
 
   async function submit() {
@@ -101,8 +132,47 @@ export default function Reviews() {
         <EmptyState title="Tidak ada pengajuan yang menunggu keputusanmu"
           hint="Pengajuan di database yang diakses group-mu sebagai Team Leader akan muncul di sini." />
       )}
+      {q.data && q.data.length > 1 && (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+          <p className="text-sm text-slate-500">{q.data.length} pengajuan menunggu keputusanmu.</p>
+          <Button variant="primary" onClick={() => { bulk.reset(); setBulkFailed([]); setBulkOpen(true); }}>
+            Setujui semua ({q.data.length})
+          </Button>
+        </div>
+      )}
+      {bulkFailed.length > 0 && <ErrorBox message={bulkFailed.join("; ")} />}
       {q.data && q.data.length > 0 && (
         <DataList label="Pengajuan menunggu keputusan" rows={q.data} columns={columns} rowKey={(c) => c.id} />
+      )}
+
+      {bulkOpen && q.data && (
+        <Modal title={`Setujui ${q.data.length} pengajuan`} onClose={() => setBulkOpen(false)}>
+          <div className="space-y-4">
+            <p className="text-sm text-slate-600">
+              Tiap pengajuan tetap dinilai sendiri-sendiri. Yang gagal, misalnya karena sudah diputuskan leader lain,
+              dilaporkan setelah proses selesai.
+            </p>
+            <ul className="max-h-48 space-y-1 overflow-y-auto rounded-xl bg-slate-100 p-3 text-sm">
+              {q.data.map((c) => (
+                <li key={c.id} className="flex flex-wrap items-center gap-2">
+                  <KindBadge kind={c.kind} />
+                  <span className="font-medium">{c.migration_name}</span>
+                  <span className="text-slate-500">di {c.connection_name}</span>
+                </li>
+              ))}
+            </ul>
+            <Field label="Komentar (opsional)">
+              <textarea className={inputCls} rows={3} value={bulkComment} onChange={(e) => setBulkComment(e.target.value)} />
+            </Field>
+            <ErrorBox message={generalError(bulk.error, [])} />
+            <div className="flex flex-wrap justify-end gap-2">
+              <Button onClick={() => setBulkOpen(false)}>Batal</Button>
+              <Button variant="primary" onClick={approveAll} disabled={bulk.isPending}>
+                {bulk.isPending ? "Memproses…" : `Setujui ${q.data.length} pengajuan`}
+              </Button>
+            </div>
+          </div>
+        </Modal>
       )}
 
       {target && copy && (

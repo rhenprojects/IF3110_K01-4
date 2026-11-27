@@ -154,34 +154,59 @@ function enqueueJob(s: Store, cr: ChangeRequest) {
 const asSeen = (cr: ChangeRequest, userId: string): ChangeRequest =>
   ({ ...cr, can_decide: cr.status === "pending_review" && cr.reviewers.some((r) => r.decision === "pending" && r.leader_id === userId) });
 
+//[review] terapkan satu keputusan; tolakan dikembalikan sebagai kode + pesan
+type DecideResult = { cr: ChangeRequest; error: "" } | { cr?: undefined; code: number; error: string };
+
+function decideOne(s: Store, userId: string, connectionId: string, requestId: string, decision: "approve" | "reject", comment: string): DecideResult {
+  const cr = s.changeRequests.find((c) => c.id === requestId && c.connection_id === connectionId);
+  if (!cr) return { code: 404, error: "change request not found" };
+  const mine = cr.reviewers.filter((r) => r.leader_id === userId);
+  if (mine.length === 0) return { code: 403, error: "only a group leader of this database can decide" };
+  if (cr.status !== "pending_review") return { code: 409, error: "change request is no longer pending review" };
+  const open = mine.filter((r) => r.decision === "pending");
+  if (open.length === 0) return { code: 409, error: "you have already decided" };
+  open.forEach((r) => Object.assign(r, { decision, comment: comment.trim(), decided_at: now() }));
+  const m = s.migrations[cr.connection_id]?.find((x) => x.id === cr.migration_id);
+  if (decision === "reject") {
+    cr.status = "rejected";
+    if (m && cr.kind === "up") Object.assign(m, { status: "draft", updated_at: now() });
+  } else if (cr.reviewers.every((r) => r.decision === "approve")) {
+    cr.status = "approved";
+    if (m && cr.kind === "up") Object.assign(m, { status: "approved", updated_at: now() });
+    enqueueJob(s, cr);
+  }
+  Object.assign(cr, { updated_at: now(), decided_at: cr.status === "pending_review" ? null : now() });
+  return { cr, error: "" };
+}
+
 //[review] setuju / tolak: leader tidak harus anggota group, jadi tidak lewat db()
 const decide = (decision: "approve" | "reject") =>
   http.post(`${P}/:id/change-requests/:rid/${decision}`, async ({ params, request }) => {
     const user = currentUser();
     if (!user) return err(401, "Unauthorized");
     const s = load();
-    const cr = s.changeRequests.find((c) => c.id === params.rid && c.connection_id === params.id);
-    if (!cr) return err(404, "change request not found");
-    const mine = cr.reviewers.filter((r) => r.leader_id === user.id);
-    if (mine.length === 0) return err(403, "only a group leader of this database can decide");
-    if (cr.status !== "pending_review") return err(409, "change request is no longer pending review");
-    const open = mine.filter((r) => r.decision === "pending");
-    if (open.length === 0) return err(409, "you have already decided");
     const body = (await request.json().catch(() => ({}))) as { comment?: string };
-    open.forEach((r) => Object.assign(r, { decision, comment: (body.comment ?? "").trim(), decided_at: now() }));
-    const m = s.migrations[cr.connection_id]?.find((x) => x.id === cr.migration_id);
-    if (decision === "reject") {
-      cr.status = "rejected";
-      if (m && cr.kind === "up") Object.assign(m, { status: "draft", updated_at: now() });
-    } else if (cr.reviewers.every((r) => r.decision === "approve")) {
-      cr.status = "approved";
-      if (m && cr.kind === "up") Object.assign(m, { status: "approved", updated_at: now() });
-      enqueueJob(s, cr);
-    }
-    Object.assign(cr, { updated_at: now(), decided_at: cr.status === "pending_review" ? null : now() });
+    const res = decideOne(s, user.id, String(params.id), String(params.rid), decision, body.comment ?? "");
+    if (!res.cr) return err(res.code, res.error);
     save(s);
-    return HttpResponse.json(asSeen(cr, user.id));
+    return HttpResponse.json(asSeen(res.cr, user.id));
   });
+
+//[review] setujui banyak pengajuan; tiap item dinilai sendiri-sendiri dan hasilnya per id
+const bulkApprove = http.post(`${P}/:id/change-requests/approve`, async ({ params, request }) => {
+  const user = currentUser();
+  if (!user) return err(401, "Unauthorized");
+  const s = load();
+  const body = (await request.json().catch(() => ({}))) as { ids?: string[]; comment?: string };
+  const ids = body.ids ?? [];
+  if (ids.length === 0 || ids.length > 100) return err(400, "isi 1 sampai 100 id");
+  const results = ids.map((id) => {
+    const res = decideOne(s, user.id, String(params.id), id, "approve", body.comment ?? "");
+    return { id, error: res.cr ? "" : res.error };
+  });
+  save(s);
+  return HttpResponse.json({ results });
+});
 
 const withName = (s: Store, conn: Connection, j: MigrationJob) =>
   ({ ...j, migration_name: s.migrations[conn.id]?.find((m) => m.id === j.migration_id)?.name });
@@ -380,6 +405,7 @@ export const databaseHandlers = [
 
   decide("approve"),
   decide("reject"),
+  bulkApprove,
 
   //[history] semua attempt; hide_rollback membuang eksekusi yang dibatalkan dan rollback suksesnya (dipasangkan lewat execution_id)
   http.get(`${P}/:id/history`, db("view", ({ s, conn, url }) => {

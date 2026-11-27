@@ -92,6 +92,7 @@ func (h *Handler) RegisterRoutes(router fiber.Router) {
 	g.Post("/:id/migrations/:mid/batch/revert", h.RevertBatchMigration)
 	g.Get("/:id/change-requests", h.ListChangeRequests)
 	g.Post("/:id/change-requests/:rid/approve", h.ApproveChangeRequest)
+	g.Post("/:id/change-requests/approve", h.ApproveChangeRequests)
 	g.Post("/:id/change-requests/:rid/reject", h.RejectChangeRequest)
 	g.Post("/:id/change-requests/:rid/dispatch", h.DispatchChangeRequest)
 	g.Get("/:id/history", h.ListHistory)

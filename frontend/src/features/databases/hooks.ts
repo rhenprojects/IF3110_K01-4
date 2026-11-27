@@ -120,6 +120,16 @@ export const useDecideChangeRequest = () => {
   });
 };
 
+//[review] setujui banyak pengajuan sekaligus; backend tetap menilai tiap request sendiri-sendiri
+export const useBulkApproveChangeRequests = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ dbId, ids, comment }: { dbId: string; ids: string[]; comment: string }) =>
+      api<{ results: { id: string; error: string }[] }>(`${base(dbId)}/change-requests/approve`, { method: "POST", body: JSON.stringify({ ids, comment }) }),
+    onSettled: () => qc.invalidateQueries({ queryKey: ["db"] }),
+  });
+};
+
 //[history] seluruh attempt eksekusi database ini; hideRollback menyembunyikan pasangan eksekusi yang dibatalkan dan rollback-nya
 export const useHistory = (id: string, hideRollback: boolean) =>
   useQuery({

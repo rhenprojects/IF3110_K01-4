@@ -3,6 +3,7 @@ package databasehandler_test
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"testing"
 	"web_backend/internal/models"
 
@@ -367,4 +368,117 @@ func TestIntegrationDispatchChangeRequest(t *testing.T) {
 	if len(again.Reviewers) != 2 {
 		t.Errorf("respons dispatch harus diperkaya: %+v", again)
 	}
+}
+
+type bulkApproveResponse struct {
+	Results []struct {
+		ID    string `json:"id"`
+		Error string `json:"error"`
+	} `json:"results"`
+}
+
+func (e *env) bulkApprove(userID string, ids ...string) (int, bulkApproveResponse, string) {
+	e.t.Helper()
+	return e.bulkApproveIn(e.connectionID, userID, ids...)
+}
+
+// bulkApproveIn memanggil bulk approve pada database tertentu.
+func (e *env) bulkApproveIn(connectionID, userID string, ids ...string) (int, bulkApproveResponse, string) {
+	e.t.Helper()
+	var resp bulkApproveResponse
+	path := "/databases/" + url.PathEscape(connectionID) + "/change-requests/approve"
+	status, raw := e.do(userID, "POST", path, map[string]any{"ids": ids, "comment": "bulk"}, &resp)
+	return status, resp, raw
+}
+
+// Bulk approve tetap memutuskan tiap permintaan sendiri-sendiri: satu kegagalan
+// dilaporkan per item dan tidak membatalkan item lain.
+func TestIntegrationBulkApproveChangeRequests(t *testing.T) {
+	e := setup(t)
+	leaderA, leaderB := e.assignLeaders()
+	create := func(name string) models.Migration {
+		table := pgx.Identifier{e.schema, name}.Sanitize()
+		return e.createMigration(e.editor, "add "+name, "CREATE TABLE IF NOT EXISTS "+table+" (id int)")
+	}
+	m1, m2 := create("bulk_a"), create("bulk_b")
+	_, cr1, _ := e.submit(e.editor, m1.ID, models.JobKindUp)
+	_, cr2, _ := e.submit(e.editor, m2.ID, models.JobKindUp)
+
+	// Non-leader: kedua item gagal, tetap 200 supaya hasil per item terbaca.
+	status, resp, raw := e.bulkApprove(e.viewer, cr1.ID, cr2.ID)
+	if status != fiber.StatusOK || len(resp.Results) != 2 || resp.Results[0].Error == "" || resp.Results[1].Error == "" {
+		t.Fatalf("bulk non-leader: status %d body %s", status, raw)
+	}
+	if got := e.requestStatus(cr1.ID); got != models.ChangeRequestPendingReview {
+		t.Fatalf("status setelah bulk non-leader = %s, mau pending_review", got)
+	}
+
+	// Leader A menyetujui keduanya: masih menunggu leader B, belum ada job.
+	status, resp, raw = e.bulkApprove(leaderA, cr1.ID, cr2.ID)
+	if status != fiber.StatusOK || len(resp.Results) != 2 {
+		t.Fatalf("bulk leader A: status %d body %s", status, raw)
+	}
+	for _, r := range resp.Results {
+		if r.Error != "" {
+			t.Errorf("leader A gagal di %s: %s", r.ID, r.Error)
+		}
+	}
+	if got := e.requestStatus(cr1.ID); got != models.ChangeRequestPendingReview {
+		t.Errorf("status setelah leader A = %s, mau pending_review", got)
+	}
+
+	// Permintaan yang sudah diputuskan dan id asing dilaporkan per item.
+	status, resp, _ = e.bulkApprove(leaderA, cr1.ID, uuid.NewString())
+	if status != fiber.StatusOK || resp.Results[0].Error == "" || resp.Results[1].Error == "" {
+		t.Errorf("bulk dengan item gagal: status %d %+v", status, resp)
+	}
+
+	// Leader B: keduanya disetujui penuh lalu masuk queue.
+	status, resp, raw = e.bulkApprove(leaderB, cr1.ID, cr2.ID)
+	if status != fiber.StatusOK {
+		t.Fatalf("bulk leader B: status %d body %s", status, raw)
+	}
+	for _, r := range resp.Results {
+		if r.Error != "" {
+			t.Fatalf("leader B gagal di %s: %s", r.ID, r.Error)
+		}
+	}
+	var list models.ChangeRequestListResponse
+	if status, raw := e.do(e.viewer, "GET", e.dbPath("change-requests"), nil, &list); status != fiber.StatusOK {
+		t.Fatalf("list: status %d body %s", status, raw)
+	}
+	if len(list.ChangeRequests) != 2 {
+		t.Fatalf("jumlah change request = %d", len(list.ChangeRequests))
+	}
+	for _, cr := range list.ChangeRequests {
+		if cr.Status != models.ChangeRequestApproved || cr.JobID == nil {
+			t.Fatalf("change request %s = %+v, mau approved + job", cr.MigrationName, cr)
+		}
+		if job := e.waitJob(*cr.JobID); job.Status != models.JobSuccess {
+			t.Fatalf("job %s = %+v", cr.MigrationName, job)
+		}
+	}
+
+	// Validasi bentuk permintaan.
+	if status, _ := e.do(leaderA, "POST", e.dbPath("change-requests", "approve"), map[string]any{"ids": []string{}}, nil); status != fiber.StatusBadRequest {
+		t.Errorf("bulk tanpa id = %d, mau 400", status)
+	}
+	// Database lain bukan error transport: item dilaporkan gagal satu per satu.
+	status, resp, _ = e.bulkApproveIn(uuid.NewString(), leaderA, cr1.ID)
+	if status != fiber.StatusOK || len(resp.Results) != 1 || resp.Results[0].Error == "" {
+		t.Errorf("bulk lewat database lain = %d %+v", status, resp)
+	}
+	if status, _ := e.do(leaderA, "POST", "/databases/bukan-uuid/change-requests/approve", map[string]any{"ids": []string{cr1.ID}}, nil); status != fiber.StatusNotFound {
+		t.Errorf("bulk dengan id database tidak valid = %d, mau 404", status)
+	}
+}
+
+// requestStatus membaca status satu change request dari database.
+func (e *env) requestStatus(requestID string) models.ChangeRequestStatus {
+	e.t.Helper()
+	var cr models.ChangeRequest
+	if err := e.db.First(&cr, "id = ?", requestID).Error; err != nil {
+		e.t.Fatalf("load change request: %v", err)
+	}
+	return cr.Status
 }

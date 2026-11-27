@@ -3,6 +3,7 @@ package databasehandler
 import (
 	"context"
 	"errors"
+	"fmt"
 	"web_backend/internal/authctx"
 	"web_backend/internal/engine"
 	"web_backend/internal/models"
@@ -128,6 +129,67 @@ func (h *Handler) respondRequests(c *fiber.Ctx, requests []models.ChangeRequest)
 
 func (h *Handler) ApproveChangeRequest(c *fiber.Ctx) error {
 	return h.decideChangeRequest(c, h.review.Approve)
+}
+
+// maxBulkApprove membatasi satu panggilan bulk agar durasi request tetap wajar;
+// klien dapat memanggil ulang untuk sisanya.
+const maxBulkApprove = 100
+
+// bulkApproveResult melaporkan hasil per change request; Error kosong berarti berhasil.
+type bulkApproveResult struct {
+	ID    string `json:"id"`
+	Error string `json:"error"`
+}
+
+// ApproveChangeRequests menyetujui beberapa change request dalam satu panggilan.
+// Tiap permintaan tetap diputuskan sendiri-sendiri: leader tiap group, aturan
+// self-approval, dispatch ke queue, dan audit log tetap berlaku per request.
+// Kegagalan satu permintaan tidak membatalkan yang lain, jadi responsnya 200
+// dengan hasil per id.
+func (h *Handler) ApproveChangeRequests(c *fiber.Ctx) error {
+	connectionID := c.Params("id")
+	if _, err := uuid.Parse(connectionID); err != nil {
+		return h.writeError(c, review.ErrRequestNotFound)
+	}
+	var req struct {
+		IDs     []string `json:"ids"`
+		Comment string   `json:"comment"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return h.writeError(c, &validationError{"ids", "invalid request body"})
+	}
+	if len(req.IDs) == 0 || len(req.IDs) > maxBulkApprove {
+		return h.writeError(c, &validationError{"ids", fmt.Sprintf("isi 1 sampai %d id", maxBulkApprove)})
+	}
+	userID := authctx.UserID(c)
+	results := make([]bulkApproveResult, 0, len(req.IDs))
+	for _, requestID := range req.IDs {
+		results = append(results, bulkApproveResult{
+			ID:    requestID,
+			Error: h.approveInConnection(c.UserContext(), userID, connectionID, requestID, req.Comment),
+		})
+	}
+	return c.JSON(fiber.Map{"results": results})
+}
+
+// approveInConnection mengembalikan pesan error (kosong = sukses) agar satu
+// kegagalan tidak menggagalkan seluruh panggilan bulk.
+func (h *Handler) approveInConnection(ctx context.Context, userID, connectionID, requestID, comment string) string {
+	if _, err := uuid.Parse(requestID); err != nil {
+		return review.ErrRequestNotFound.Error()
+	}
+	var cr models.ChangeRequest
+	err := h.db.WithContext(ctx).First(&cr, "id = ? AND connection_id = ?", requestID, connectionID).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return review.ErrRequestNotFound.Error()
+	}
+	if err != nil {
+		return err.Error()
+	}
+	if _, err := h.review.Approve(ctx, userID, cr.ID, comment); err != nil {
+		return err.Error()
+	}
+	return ""
 }
 
 func (h *Handler) RejectChangeRequest(c *fiber.Ctx) error {
