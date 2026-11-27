@@ -150,7 +150,8 @@ func (h *Handler) Schema(c *fiber.Ctx) error {
 		return h.writeError(c, err)
 	}
 	var schemas []models.SchemaInfo
-	err = readOnly(c.UserContext(), pool, func(q querier) (err error) {
+	read := viewerRead{actor: authctx.UserID(c), database: conn.ID, operation: "schema"}
+	err = readOnly(c.UserContext(), pool, read, func(q querier) (err error) {
 		schemas, err = readSchema(c.UserContext(), q)
 		return err
 	})
@@ -177,7 +178,8 @@ func (h *Handler) Rows(c *fiber.Ctx) error {
 		return h.writeError(c, err)
 	}
 	var result *models.RowsResponse
-	err = readOnly(c.UserContext(), pool, func(q querier) (err error) {
+	read := viewerRead{actor: authctx.UserID(c), database: conn.ID, operation: "rows"}
+	err = readOnly(c.UserContext(), pool, read, func(q querier) (err error) {
 		result, err = readRows(c.UserContext(), q, schema, table, limit, offset)
 		return err
 	})

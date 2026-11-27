@@ -5,6 +5,7 @@ import (
 	"database/sql/driver"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 	"web_backend/internal/models"
@@ -14,6 +15,10 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 var (
@@ -31,7 +36,26 @@ type querier interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
-func readOnly(ctx context.Context, pool *pgxpool.Pool, fn func(q querier) error) error {
+var viewerTracer = otel.Tracer("web_backend/internal/database_handler")
+
+// viewerRead mengidentifikasi siapa membaca apa, untuk log dan span query viewer.
+type viewerRead struct {
+	actor     string
+	database  string
+	operation string// schema atau rows
+}
+
+func readOnly(ctx context.Context, pool *pgxpool.Pool, read viewerRead, fn func(q querier) error) (err error) {
+	ctx, span := viewerTracer.Start(ctx, "viewer.read", trace.WithAttributes(
+		attribute.String("db.connection_id", read.database), attribute.String("viewer.operation", read.operation)))
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+		}
+		span.End()
+	}()
+
 	tx, err := pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
 	if err != nil {
 		return translateTargetError(err)
@@ -41,7 +65,109 @@ func readOnly(ctx context.Context, pool *pgxpool.Pool, fn func(q querier) error)
 	if _, err := tx.Exec(ctx, fmt.Sprintf("SET LOCAL statement_timeout = %d", viewerQueryTimeout.Milliseconds())); err != nil {
 		return translateTargetError(err)
 	}
-	return translateTargetError(fn(tx))
+	return translateTargetError(fn(&loggedQuerier{q: tx, parent: ctx, read: read}))
+}
+
+// loggedQuerier mencatat setiap query read-only viewer sebagai log JSON (event sql.query) dan span db.query.
+type loggedQuerier struct {
+	q      querier
+	parent context.Context // context span viewer.read
+	read   viewerRead
+}
+
+func (l *loggedQuerier) start(sql string) (context.Context, trace.Span, time.Time) {
+	ctx, span := viewerTracer.Start(l.parent, "db.query", trace.WithSpanKind(trace.SpanKindClient),
+		trace.WithAttributes(attribute.String("db.system.name", "postgresql"), attribute.String("db.query.text", compactSQL(sql))))
+	return ctx, span, time.Now()
+}
+
+func (l *loggedQuerier) finish(ctx context.Context, span trace.Span, started time.Time, sql string, args []any, rows int64, err error) {
+	duration := time.Since(started)
+	span.SetAttributes(attribute.Int64("db.response.returned_rows", rows))
+	attrs := []any{"event", "sql.query", "actor", l.read.actor, "database", l.read.database,
+		"operation", l.read.operation, "query", compactSQL(sql), "params", args, "rows", rows,
+		"duration_ms", duration.Milliseconds()}
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) {
+			attrs = append(attrs, "sqlstate", pgErr.Code)
+		}
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		span.End()
+		slog.WarnContext(ctx, "viewer query failed", append(attrs, "status", "failed", "error", err.Error())...)
+		return
+	}
+	span.End()
+	slog.InfoContext(ctx, "viewer query executed", append(attrs, "status", "success")...)
+}
+
+func (l *loggedQuerier) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	spanCtx, span, started := l.start(sql)
+	rows, err := l.q.Query(ctx, sql, args...)
+	if err != nil {
+		l.finish(spanCtx, span, started, sql, args, 0, err)
+		return nil, err
+	}
+	return &loggedRows{Rows: rows, done: func(n int64, err error) { l.finish(spanCtx, span, started, sql, args, n, err) }}, nil
+}
+
+func (l *loggedQuerier) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	spanCtx, span, started := l.start(sql)
+	return loggedRow{row: l.q.QueryRow(ctx, sql, args...), done: func(err error) {
+		rows := int64(1)
+		if errors.Is(err, pgx.ErrNoRows) {
+			rows, err = 0, nil
+		} else if err != nil {
+			rows = 0
+		}
+		l.finish(spanCtx, span, started, sql, args, rows, err)
+	}}
+}
+
+// loggedRows menghitung row yang dibaca dan mencatat query saat hasilnya selesai dibaca atau ditutup.
+type loggedRows struct {
+	pgx.Rows
+	n        int64
+	finished bool
+	done     func(rows int64, err error)
+}
+
+func (r *loggedRows) Next() bool {
+	if r.Rows.Next() {
+		r.n++
+		return true
+	}
+	r.finish()
+	return false
+}
+
+func (r *loggedRows) Close() {
+	r.Rows.Close()
+	r.finish()
+}
+
+func (r *loggedRows) finish() {
+	if !r.finished {
+		r.finished = true
+		r.done(r.n, r.Rows.Err())
+	}
+}
+
+type loggedRow struct {
+	row  pgx.Row
+	done func(err error)
+}
+
+func (r loggedRow) Scan(dest ...any) error {
+	err := r.row.Scan(dest...)
+	r.done(err)
+	return err
+}
+
+// compactSQL merapikan whitespace query katalog yang ditulis multi-baris agar log tetap satu baris.
+func compactSQL(sql string) string {
+	return strings.Join(strings.Fields(sql), " ")
 }
 
 func translateTargetError(err error) error {
