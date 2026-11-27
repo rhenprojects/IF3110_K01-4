@@ -293,3 +293,6 @@ Query viewer menghasilkan span `viewer.read` dengan anak `db.query` per query. E
 - [`docs/api-contract.md`](docs/api-contract.md) — kontrak API (endpoint, request, response, kode error) dan ketentuan sistem
 - [`docs/schema.sql`](docs/schema.sql) — struktur tabel database platform
 - [`docs/TEST_CHECKLIST.md`](docs/TEST_CHECKLIST.md) — daftar fitur dan test yang membuktikannya
+- [`docs/MANUAL_UI_TESTING.md`](docs/MANUAL_UI_TESTING.md) — panduan klik-per-klik semua fitur dari SPA (fokus batch)
+- [`docs/BATCH_TESTING.md`](docs/BATCH_TESTING.md) — checklist uji batch, kontrak SQL, checkpoint, metrik
+- [`docs/BATCH_MANUAL_TESTING.md`](docs/BATCH_MANUAL_TESTING.md) — uji batch teknis (script, cancel/resume/revert)

@@ -1,5 +1,7 @@
 # Batch Manual Test — potongan row
 
+Panduan klik-per-klik seluruh fitur (termasuk batch) ada di [`MANUAL_UI_TESTING.md`](MANUAL_UI_TESTING.md). Dokumen ini fokus pada uji batch yang lebih teknis.
+
 Mode yang diuji: satu migration besar dijalankan per `batch_size` row, dengan approval leader dan worker queue.
 
 ## Prasyarat
