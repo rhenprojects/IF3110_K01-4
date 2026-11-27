@@ -32,8 +32,21 @@ func isReviewConflict(err error) bool {
 }
 
 // reviewEnqueue meneruskan change request yang sudah disetujui ke queue engine.
-func reviewEnqueue(eng *engine.Engine) review.EnqueueFunc {
+func reviewEnqueue(db *gorm.DB, eng *engine.Engine) review.EnqueueFunc {
 	return func(ctx context.Context, cr models.ChangeRequest) (string, error) {
+		if cr.Kind == models.JobKindUp {
+			var m models.Migration
+			if err := db.WithContext(ctx).First(&m, "id = ?", cr.MigrationID).Error; err != nil {
+				return "", err
+			}
+			if m.BatchSize > 0 && m.BatchRunID != nil && m.Status == models.MigrationPartial {
+				job, err := eng.EnqueueResume(ctx, cr.ConnectionID, cr.MigrationID, cr.RequestedBy)
+				if err != nil {
+					return "", err
+				}
+				return job.ID, nil
+			}
+		}
 		req := engine.EnqueueRequest{
 			ConnectionID: cr.ConnectionID, MigrationID: cr.MigrationID, Kind: cr.Kind, RequestedBy: cr.RequestedBy,
 		}

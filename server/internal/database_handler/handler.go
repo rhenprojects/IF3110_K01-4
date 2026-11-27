@@ -53,7 +53,7 @@ func NewHandlerWithEngine(db *gorm.DB, svc *targetdb.Service, eng *engine.Engine
 	h := &Handler{db: db, svc: svc, engine: eng}
 	if db != nil && eng != nil {
 		h.review = review.New(db, review.Deps{
-			Enqueue: reviewEnqueue(eng), Validate: engine.ValidateDefinition,
+			Enqueue: reviewEnqueue(db, eng), Validate: engine.ValidateDefinition,
 			DenySelfApproval: strings.EqualFold(os.Getenv("APP_ENV"), "production") && os.Getenv("ALLOW_SELF_APPROVAL") != "true",
 		})
 	}
@@ -352,14 +352,15 @@ func (h *Handler) ResumeBatchMigration(c *fiber.Ctx) error {
 	if err != nil {
 		return h.writeError(c, err)
 	}
-	if m.BatchSize <= 0 || m.BatchRunID == nil {
+	if m.BatchSize <= 0 || m.BatchRunID == nil || m.Status != models.MigrationPartial {
 		return httpx.Error(c, fiber.StatusConflict, "migration has no batch checkpoint to resume")
 	}
-	job, err := h.engine.EnqueueResume(c.UserContext(), conn.ID, m.ID, authctx.UserID(c))
+	// Resume diajukan sebagai change request up; job baru masuk queue setelah semua leader menyetujui.
+	cr, err := h.review.Submit(c.UserContext(), authctx.UserID(c), conn.ID, m.ID, models.JobKindUp)
 	if err != nil {
 		return h.writeError(c, err)
 	}
-	return c.Status(fiber.StatusAccepted).JSON(job)
+	return c.Status(fiber.StatusCreated).JSON(cr)
 }
 
 func (h *Handler) RevertBatchMigration(c *fiber.Ctx) error {
