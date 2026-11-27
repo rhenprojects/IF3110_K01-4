@@ -363,6 +363,64 @@ func TestReject_ReturnsMigrationToDraftAndAllowsResubmit(t *testing.T) {
 	}
 }
 
+// partialBatch membuat migration batch yang berhenti di checkpoint.
+func (e *env) partialBatch() *models.Migration {
+	e.t.Helper()
+	m := e.migration(models.MigrationPartial, "UPDATE t SET v = v - 1", false)
+	runID := uuid.NewString()
+	if err := e.db.Model(m).Updates(map[string]any{"batch_size": 100, "batch_run_id": runID, "batch_status": "partial"}).Error; err != nil {
+		e.t.Fatal(err)
+	}
+	m.BatchSize, m.BatchRunID = 100, &runID
+	return m
+}
+
+func TestResume_PartialBatchNeedsEveryLeader(t *testing.T) {
+	e := newEnv(t)
+	m := e.partialBatch()
+
+	cr := e.submit(m, models.JobKindUp)
+	if cr.Status != models.ChangeRequestPendingReview || len(e.q.calls) != 0 {
+		t.Fatalf("resume harus menunggu review, bukan langsung masuk queue: %+v, calls %d", cr, len(e.q.calls))
+	}
+	if got := e.migrationStatus(m.ID); got != models.MigrationPartial {
+		t.Errorf("status migration selama review = %s, mau tetap partial", got)
+	}
+	if _, err := e.svc.Submit(ctx, e.editor, e.connID, m.ID, models.JobKindUp); !errors.Is(err, ErrAlreadyPending) {
+		t.Errorf("resume ganda: %v", err)
+	}
+
+	if _, err := e.svc.Approve(ctx, e.leaderA, cr.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	if len(e.q.calls) != 0 {
+		t.Fatal("resume masuk queue sebelum semua leader setuju")
+	}
+	got, err := e.svc.Approve(ctx, e.leaderB, cr.ID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != models.ChangeRequestApproved || got.JobID == nil || len(e.q.calls) != 1 || e.q.calls[0].Kind != models.JobKindUp {
+		t.Errorf("resume setelah semua setuju = %+v, calls %+v", got, e.q.calls)
+	}
+}
+
+func TestResume_RejectKeepsCheckpoint(t *testing.T) {
+	e := newEnv(t)
+	m := e.partialBatch()
+	cr := e.submit(m, models.JobKindUp)
+
+	if _, err := e.svc.Reject(ctx, e.leaderB, cr.ID, "tunggu jam sepi"); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.migrationStatus(m.ID); got != models.MigrationPartial {
+		t.Errorf("status migration setelah resume ditolak = %s, mau tetap partial", got)
+	}
+	if len(e.q.calls) != 0 {
+		t.Error("penolakan tidak boleh mengirim ke queue")
+	}
+}
+
 func TestApprove_DispatchFailureKeepsApprovalAndCanRetry(t *testing.T) {
 	e := newEnv(t)
 	m := e.migration(models.MigrationDraft, "DROP TABLE x", false)

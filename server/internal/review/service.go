@@ -95,9 +95,10 @@ func (s *Service) Submit(ctx context.Context, userID, connectionID, migrationID 
 			RequestedBy:  userID,
 		}
 
+		resume := kind == models.JobKindUp && isBatchResume(&m)
 		switch kind {
 		case models.JobKindUp:
-			if m.Status != models.MigrationDraft {
+			if m.Status != models.MigrationDraft && !resume {
 				return ErrNotDraft
 			}
 			if s.deps.Validate != nil {
@@ -141,7 +142,8 @@ func (s *Service) Submit(ctx context.Context, userID, connectionID, migrationID 
 			return err
 		}
 
-		if kind == models.JobKindUp {
+		// Resume batch tetap berstatus partial selama direview; checkpoint-nya tidak boleh hilang.
+		if kind == models.JobKindUp && !resume {
 			return moveMigration(tx, m.ID, models.MigrationDraft, models.MigrationPendingReview)
 		}
 		return nil
@@ -358,7 +360,20 @@ func settle(tx *gorm.DB, cr *models.ChangeRequest, status models.ChangeRequestSt
 	if cr.Kind != models.JobKindUp {
 		return nil
 	}
+	var m models.Migration
+	if err := tx.First(&m, "id = ?", cr.MigrationID).Error; err != nil {
+		return err
+	}
+	if isBatchResume(&m) {
+		return nil // engine yang memindahkan status saat job resume dibuat
+	}
 	return moveMigration(tx, cr.MigrationID, models.MigrationPendingReview, migration)
+}
+
+// isBatchResume: pengajuan up untuk migration batch yang berhenti di checkpoint berarti "lanjutkan dari checkpoint".
+// Lanjutan tetap perlu approval leader seperti eksekusi lain.
+func isBatchResume(m *models.Migration) bool {
+	return m.BatchSize > 0 && m.BatchRunID != nil && m.Status == models.MigrationPartial
 }
 
 func moveMigration(tx *gorm.DB, id string, from, to models.MigrationStatus) error {
