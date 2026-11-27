@@ -27,26 +27,10 @@ func (h *Handler) RegisterBatchRoutes(router fiber.Router) {
 	g.Get("/:id/executions", h.ListExecutions)
 }
 
+// CreateBatch dipertahankan sebagai 410. Mode batch sekarang melekat pada
+// satu migration lewat field batch_size dan tetap melalui review + queue.
 func (h *Handler) CreateBatch(c *fiber.Ctx) error {
-	conn, _, err := h.accessible(c, true)
-	if err != nil {
-		return h.writeError(c, err)
-	}
-	var req struct {
-		MigrationIDs []string `json:"migration_ids"`
-	}
-	if err := c.BodyParser(&req); err != nil {
-		return httpx.Error(c, fiber.StatusBadRequest, "invalid request body")
-	}
-	coordinator := h.NewBatchCoordinator()
-	b, err := coordinator.Create(c.UserContext(), conn.ID, authctx.UserID(c), req.MigrationIDs)
-	if err != nil {
-		return h.writeBatchError(c, err)
-	}
-	if err := coordinator.Start(b); err != nil {
-		return h.writeBatchError(c, err)
-	}
-	return c.Status(fiber.StatusAccepted).JSON(b)
+	return httpx.Error(c, fiber.StatusGone, "batch per migration: set batch_size pada migration, lalu ajukan review")
 }
 
 func (h *Handler) ListBatches(c *fiber.Ctx) error {
@@ -109,19 +93,7 @@ func (h *Handler) CancelBatch(c *fiber.Ctx) error {
 }
 
 func (h *Handler) RetryBatch(c *fiber.Ctx) error {
-	b, err := h.batchForRequest(c)
-	if err != nil {
-		return h.writeError(c, err)
-	}
-	coordinator := h.NewBatchCoordinator()
-	retried, err := coordinator.Retry(c.UserContext(), b, authctx.UserID(c))
-	if err != nil {
-		return h.writeBatchError(c, err)
-	}
-	if err := coordinator.Start(retried); err != nil {
-		return h.writeBatchError(c, err)
-	}
-	return c.Status(fiber.StatusCreated).JSON(retried)
+	return httpx.Error(c, fiber.StatusGone, "batch per migration: set batch_size pada migration, lalu ajukan review")
 }
 
 func (h *Handler) ListExecutions(c *fiber.Ctx) error {

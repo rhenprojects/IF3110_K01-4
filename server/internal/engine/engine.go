@@ -23,13 +23,15 @@ type PoolProvider interface {
 }
 
 type Options struct {
-	MaxAttempts    int           // attempt maksimum per job, termasuk yang pertama
-	BackoffBase    time.Duration // jeda retry pertama, lalu berlipat dua
-	BackoffMax     time.Duration
-	PollEvery      time.Duration // interval worker memeriksa queue
-	HeartbeatEvery time.Duration
-	StaleAfter     time.Duration // job running tanpa heartbeat selama ini dianggap terhenti
-	Logger         *slog.Logger
+	MaxAttempts         int           // attempt maksimum per job, termasuk yang pertama
+	BackoffBase         time.Duration // jeda retry pertama, lalu berlipat dua
+	BackoffMax          time.Duration
+	PollEvery           time.Duration // interval worker memeriksa queue
+	HeartbeatEvery      time.Duration
+	StaleAfter          time.Duration // job running tanpa heartbeat selama ini dianggap terhenti
+	StatementTimeout    time.Duration // batas eksekusi SQL migration di database target
+	DenySuperuserTarget bool          // tolak eksekusi bila user target adalah superuser
+	Logger              *slog.Logger
 }
 
 func (o Options) withDefaults() Options {
@@ -50,6 +52,9 @@ func (o Options) withDefaults() Options {
 	}
 	if o.StaleAfter <= 0 {
 		o.StaleAfter = 30 * time.Second
+	}
+	if o.StatementTimeout <= 0 {
+		o.StatementTimeout = 5 * time.Minute
 	}
 	if o.Logger == nil {
 		o.Logger = slog.Default()
@@ -126,6 +131,9 @@ func (e *Engine) Enqueue(ctx context.Context, req EnqueueRequest) (job *models.M
 			return nil, err
 		}
 	case models.JobKindRollback:
+		if m.BatchSize > 0 {
+			return nil, ErrNotExecutable
+		}
 		if m.Irreversible {
 			return nil, ErrIrreversible
 		}
@@ -134,7 +142,15 @@ func (e *Engine) Enqueue(ctx context.Context, req EnqueueRequest) (job *models.M
 		}
 		rollbackOf = &req.RollbackOf
 	case models.JobKindForward:
+		if m.BatchSize > 0 {
+			return nil, ErrNotExecutable
+		}
 		if m.Status != models.MigrationSuccess && m.Status != models.MigrationFailed {
+			return nil, ErrNotExecutable
+		}
+	case models.JobKindRevert:
+		if m.BatchSize <= 0 || m.BatchRunID == nil ||
+			(m.Status != models.MigrationSuccess && m.Status != models.MigrationPartial) {
 			return nil, ErrNotExecutable
 		}
 	default:

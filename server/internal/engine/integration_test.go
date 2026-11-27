@@ -413,7 +413,7 @@ func TestIntegrationLockIsExclusiveAcrossProcessesAndReleasedOnCrash(t *testing.
 
 	// Simulasi worker crash: sesi pemegang lock diputus paksa
 	if _, err := f.target.Exec(ctx, `SELECT pg_terminate_backend(pid) FROM pg_locks
-		WHERE locktype = 'advisory' AND classid = 17474 AND granted AND pid <> pg_backend_pid()`); err != nil {
+		WHERE locktype = 'advisory' AND granted AND pid <> pg_backend_pid()`); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(5 * time.Second)
@@ -698,5 +698,189 @@ func TestIntegrationTraceFollowsJobFromRequestToWorker(t *testing.T) {
 			t.Fatalf("spans missing from trace %s: %v", traceID, missing)
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func TestIntegrationStatementTimeoutFailsJob(t *testing.T) {
+	f := setup(t)
+	eng, err := engine.New(f.db, f.pools, engine.Options{
+		StatementTimeout: 100 * time.Millisecond,
+		PollEvery:        20 * time.Millisecond, BackoffBase: 20 * time.Millisecond, BackoffMax: 100 * time.Millisecond,
+		HeartbeatEvery: 100 * time.Millisecond, StaleAfter: time.Second,
+		Logger: slog.New(slog.NewJSONHandler(io.Discard, nil)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(eng.Start(1))
+
+	m := f.migration(f.connID, "slow query", `SELECT pg_sleep(1)`, `SELECT 1`)
+	done := f.waitJob(f.enqueue(eng, f.connID, m.ID, models.JobKindUp, "").ID)
+	if done.Status != models.JobFailed || done.Attempts != 1 {
+		t.Fatalf("job = %+v, want failed after one attempt", done)
+	}
+	execs := f.executions(m.ID)
+	if len(execs) != 1 || execs[0].Status != models.ExecutionFailed {
+		t.Fatalf("executions = %+v, want one failed execution", execs)
+	}
+	if execs[0].SQLState != "57014" && !strings.Contains(execs[0].Error, "timeout") && !strings.Contains(execs[0].Error, "deadline") {
+		t.Errorf("execution error = %q (state %q), want statement/context timeout", execs[0].Error, execs[0].SQLState)
+	}
+}
+
+func TestIntegrationChunkedMigrationCheckpointsAndCommits(t *testing.T) {
+	f := setup(t)
+	f.execTarget(`CREATE TABLE ` + f.s() + `.batch_rows (id bigint PRIMARY KEY, val int NOT NULL DEFAULT 0)`)
+	f.execTarget(`INSERT INTO ` + f.s() + `.batch_rows (id) SELECT g FROM generate_series(1, 2500) g`)
+
+	up := `UPDATE ` + f.s() + `.batch_rows SET val = val + 1
+		WHERE id IN (SELECT id FROM ` + f.s() + `.batch_rows WHERE id > :last_id ORDER BY id LIMIT :batch_size)`
+	down := `UPDATE ` + f.s() + `.batch_rows SET val = val - 1 WHERE id >= :from_id AND id <= :to_id`
+	m := f.migration(f.connID, "chunked", up, down)
+	m.BatchSize = 1000
+	if err := f.db.Model(&models.Migration{}).Where("id = ?", m.ID).Update("batch_size", 1000).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	eng := f.engine()
+	t.Cleanup(eng.Start(1))
+	done := f.waitJob(f.enqueue(eng, f.connID, m.ID, models.JobKindUp, "").ID)
+	if done.Status != models.JobSuccess {
+		t.Fatalf("job = %+v", done)
+	}
+	got := f.reloadMigration(m.ID)
+	if got.Status != models.MigrationSuccess || got.BatchStatus != "success" || got.BatchRows != 2500 || got.BatchChunks != 3 || got.BatchCursor != 2500 {
+		t.Fatalf("migration = %+v", got)
+	}
+	var wrong int
+	if err := f.target.QueryRow(context.Background(), `SELECT count(*) FROM `+f.s()+`.batch_rows WHERE val <> 1`).Scan(&wrong); err != nil || wrong != 0 {
+		t.Fatalf("rows not all updated: wrong=%d err=%v", wrong, err)
+	}
+	var chunks int
+	if err := f.target.QueryRow(context.Background(),
+		`SELECT count(*) FROM _dbmp.batch_chunks c JOIN _dbmp.batch_runs r ON r.run_id = c.run_id WHERE r.migration_id = $1`, m.ID).Scan(&chunks); err != nil || chunks != 3 {
+		t.Fatalf("chunks = %d, err %v", chunks, err)
+	}
+}
+
+func TestIntegrationChunkedMigrationCancelRevertsCommittedChunks(t *testing.T) {
+	f := setup(t)
+	f.execTarget(`CREATE TABLE ` + f.s() + `.batch_cancel_rows (id bigint PRIMARY KEY, val int NOT NULL DEFAULT 0)`)
+	f.execTarget(`INSERT INTO ` + f.s() + `.batch_cancel_rows (id) SELECT g FROM generate_series(1, 5000) g`)
+	up := `UPDATE ` + f.s() + `.batch_cancel_rows SET val = val + 1
+		WHERE id IN (SELECT id FROM ` + f.s() + `.batch_cancel_rows, (SELECT pg_sleep(0.3)) s
+		WHERE id > :last_id ORDER BY id LIMIT :batch_size)`
+	down := `UPDATE ` + f.s() + `.batch_cancel_rows SET val = val - 1 WHERE id >= :from_id AND id <= :to_id`
+	m := f.migration(f.connID, "chunked cancel", up, down)
+	m.BatchSize = 1000
+	if err := f.db.Model(&models.Migration{}).Where("id = ?", m.ID).Update("batch_size", 1000).Error; err != nil {
+		t.Fatal(err)
+	}
+	eng := f.engine()
+	t.Cleanup(eng.Start(1))
+	job := f.enqueue(eng, f.connID, m.ID, models.JobKindUp, "")
+	time.Sleep(450 * time.Millisecond)
+	if err := f.db.Model(&models.Migration{}).Where("id = ?", m.ID).Update("batch_cancel_requested", true).Error; err != nil {
+		t.Fatal(err)
+	}
+	done := f.waitJob(job.ID)
+	if done.Status != models.JobFailed {
+		t.Fatalf("job status = %s, want failed after cancel", done.Status)
+	}
+	got := f.reloadMigration(m.ID)
+	if got.Status != models.MigrationPartial || got.BatchStatus != "partial" || got.BatchRows == 0 {
+		t.Fatalf("migration = %+v, want partial checkpoint after stop", got)
+	}
+	if _, err := eng.RevertBatch(context.Background(), f.connID, m.ID, f.userID); err != nil {
+		t.Fatal(err)
+	}
+	got = f.reloadMigration(m.ID)
+	if got.Status != models.MigrationPartial || got.BatchStatus != "reverted" || got.BatchRows != 0 || got.BatchChunks != 0 {
+		t.Fatalf("migration after revert = %+v", got)
+	}
+	var wrong int
+	if err := f.target.QueryRow(context.Background(), `SELECT count(*) FROM `+f.s()+`.batch_cancel_rows WHERE val <> 0`).Scan(&wrong); err != nil || wrong != 0 {
+		t.Fatalf("rows not reverted: wrong=%d err=%v", wrong, err)
+	}
+	var chunks int
+	if err := f.target.QueryRow(context.Background(),
+		`SELECT count(*) FROM _dbmp.batch_chunks c JOIN _dbmp.batch_runs r ON r.run_id = c.run_id WHERE r.migration_id = $1`, m.ID).Scan(&chunks); err != nil || chunks != 0 {
+		t.Fatalf("chunks = %d, err %v", chunks, err)
+	}
+}
+
+func TestIntegrationChunkedMigrationResumesFromTargetCheckpoint(t *testing.T) {
+	f := setup(t)
+	f.execTarget(`CREATE TABLE ` + f.s() + `.batch_resume_rows (id bigint PRIMARY KEY, val int NOT NULL DEFAULT 0)`)
+	f.execTarget(`INSERT INTO ` + f.s() + `.batch_resume_rows (id) SELECT g FROM generate_series(1, 2500) g`)
+	f.execTarget(`UPDATE ` + f.s() + `.batch_resume_rows SET val = 1 WHERE id <= 1000`)
+	up := `UPDATE ` + f.s() + `.batch_resume_rows SET val = val + 1
+		WHERE id IN (SELECT id FROM ` + f.s() + `.batch_resume_rows WHERE id > :last_id ORDER BY id LIMIT :batch_size)`
+	down := `UPDATE ` + f.s() + `.batch_resume_rows SET val = val - 1 WHERE id >= :from_id AND id <= :to_id`
+	m := f.migration(f.connID, "chunked resume", up, down)
+	runID := uuid.NewString()
+	if err := f.target.QueryRow(context.Background(),
+		`INSERT INTO _dbmp.batch_runs (run_id, execution_id, migration_id, status, cursor_id, committed_rows, committed_chunks)
+		 VALUES ($1,$2,$3,'partial',1000,1000,1) RETURNING run_id`, runID, uuid.NewString(), m.ID).Scan(&runID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.target.Exec(context.Background(),
+		`INSERT INTO _dbmp.batch_chunks (run_id, chunk_no, execution_id, from_id, to_id, rows, down_sql)
+		 VALUES ($1,1,$2,1,1000,1000,$3)`, runID, uuid.NewString(), down); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.db.Model(&models.Migration{}).Where("id = ?", m.ID).Updates(map[string]any{
+		"batch_size": 1000, "batch_run_id": runID, "batch_status": "partial",
+		"status": models.MigrationPartial, "batch_cursor": 1000, "batch_rows": 1000, "batch_chunks": 1,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	eng := f.engine()
+	t.Cleanup(eng.Start(1))
+	job, err := eng.EnqueueResume(context.Background(), f.connID, m.ID, f.userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := f.waitJob(job.ID)
+	if done.Status != models.JobSuccess {
+		t.Fatalf("job = %+v", done)
+	}
+	got := f.reloadMigration(m.ID)
+	if got.Status != models.MigrationSuccess || got.BatchStatus != "success" || got.BatchRows != 2500 || got.BatchChunks != 3 {
+		t.Fatalf("migration = %+v", got)
+	}
+	var wrong int
+	if err := f.target.QueryRow(context.Background(), `SELECT count(*) FROM `+f.s()+`.batch_resume_rows WHERE val <> 1`).Scan(&wrong); err != nil || wrong != 0 {
+		t.Fatalf("rows not resumed consistently: wrong=%d err=%v", wrong, err)
+	}
+}
+
+func TestIntegrationChunkedMigrationRevertAfterSuccess(t *testing.T) {
+	f := setup(t)
+	f.execTarget(`CREATE TABLE ` + f.s() + `.batch_revert_rows (id bigint PRIMARY KEY, val int NOT NULL DEFAULT 0)`)
+	f.execTarget(`INSERT INTO ` + f.s() + `.batch_revert_rows (id) SELECT g FROM generate_series(1, 1500) g`)
+	up := `UPDATE ` + f.s() + `.batch_revert_rows SET val = val + 1
+		WHERE id IN (SELECT id FROM ` + f.s() + `.batch_revert_rows WHERE id > :last_id ORDER BY id LIMIT :batch_size)`
+	down := `UPDATE ` + f.s() + `.batch_revert_rows SET val = val - 1 WHERE id >= :from_id AND id <= :to_id`
+	m := f.migration(f.connID, "chunked revert", up, down)
+	if err := f.db.Model(&models.Migration{}).Where("id = ?", m.ID).Update("batch_size", 500).Error; err != nil {
+		t.Fatal(err)
+	}
+	eng := f.engine()
+	t.Cleanup(eng.Start(1))
+	if done := f.waitJob(f.enqueue(eng, f.connID, m.ID, models.JobKindUp, "").ID); done.Status != models.JobSuccess {
+		t.Fatalf("job = %+v", done)
+	}
+	got, err := eng.RevertBatch(context.Background(), f.connID, m.ID, f.userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != models.MigrationPartial || got.BatchStatus != "reverted" || got.BatchRows != 0 || got.BatchChunks != 0 {
+		t.Fatalf("migration after revert = %+v", got)
+	}
+	var wrong int
+	if err := f.target.QueryRow(context.Background(), `SELECT count(*) FROM `+f.s()+`.batch_revert_rows WHERE val <> 0`).Scan(&wrong); err != nil || wrong != 0 {
+		t.Fatalf("rows not reverted: wrong=%d err=%v", wrong, err)
 	}
 }

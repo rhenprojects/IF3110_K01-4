@@ -53,7 +53,7 @@ export type AccessLevel = "view" | "edit";
 export type AccessEntry = { connection_id: string; level: AccessLevel };
 
 //[databases] endpoint user biasa (docs/api-contract.md bagian 8)
-export type DatabaseItem = { id: string; name: string; db_name: string; level: AccessLevel };
+export type DatabaseItem = { id: string; name: string; db_name: string; level: AccessLevel; can_batch?: boolean };
 
 export type ColumnInfo = { name: string; type: string; nullable: boolean; default: string | null; is_primary_key: boolean };
 export type ConstraintInfo = { name: string; type: "primary_key" | "foreign_key" | "unique" | "check"; definition: string };
@@ -77,7 +77,7 @@ export type RowsResponse = {
 };
 
 //[migration] docs/api-contract.md bagian 9
-export type MigrationStatus = "draft" | "pending_review" | "approved" | "success" | "failed";
+export type MigrationStatus = "draft" | "pending_review" | "approved" | "success" | "failed" | "partial";
 export type Migration = {
   id: string;
   connection_id: string;
@@ -89,6 +89,13 @@ export type Migration = {
   irreversible_reason: string;
   revision: number; //[migration] naik setiap draft diubah
   status: MigrationStatus;
+  batch_size: number;
+  batch_run_id?: string | null;
+  batch_status: string;
+  batch_cursor: number;
+  batch_rows: number;
+  batch_chunks: number;
+  batch_cancel_requested: boolean;
   error: string;
   created_by: string;
   created_by_name: string;
@@ -99,7 +106,7 @@ export type Migration = {
   executed_at: string | null;
   duration_ms: number | null;
 };
-export type MigrationInput = { name: string; sql: string; sql_down?: string; irreversible?: boolean; irreversible_reason?: string };
+export type MigrationInput = { name: string; sql: string; sql_down?: string; irreversible?: boolean; irreversible_reason?: string; batch_size?: number };
 
 //[review] pengajuan perubahan (up / rollback / forward) yang harus disetujui Team Leader tiap group
 export type ChangeRequestStatus = "pending_review" | "approved" | "rejected";
@@ -133,7 +140,7 @@ export type ChangeRequest = {
 };
 
 //[queue] satu permintaan eksekusi di queue; execute menjawab 202 dengan objek ini
-export type JobKind = "up" | "rollback" | "forward";
+export type JobKind = "up" | "rollback" | "forward" | "revert";
 export type JobStatus = "queued" | "running" | "success" | "failed" | "uncertain";
 export type MigrationJob = {
   id: string;

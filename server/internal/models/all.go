@@ -16,5 +16,6 @@ func All() []any {
 		&MigrationExecution{},
 		&ChangeRequest{},
 		&Approval{},
+		&AuditLog{},
 	}
 }

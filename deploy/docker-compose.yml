@@ -7,8 +7,8 @@ services:
       dockerfile: ../deploy/backend.Dockerfile
     container_name: if3110-backend
     ports:
-      - "${BACKEND_PORT:-9000}:9000"
-      - "${METRICS_PORT:-9101}:9101"
+      - "127.0.0.1:${BACKEND_PORT:-9000}:9000"
+      - "127.0.0.1:${METRICS_PORT:-9101}:9101"
     environment:
       PORT: "9000"
       METRICS_ADDR: "0.0.0.0:9101"
@@ -17,6 +17,8 @@ services:
       ADMIN_PASSWORD: "admin-password"
       SESSION_HASH_KEY: "hash-key-0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
       SESSION_BLOCK_KEY: "0123456789abcdef0123456789abcdef"
+      WORKER_COUNT: "2"
+      MIGRATION_TIMEOUT_SECONDS: "300"
       DB_ENC_KEY: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
     depends_on:
       db:
@@ -28,10 +30,16 @@ services:
       dockerfile: ../deploy/frontend.Dockerfile
     container_name: if3110-frontend
     ports:
-      - "80:80"
-      - "5173:80"
+      - "127.0.0.1:80:80"
+      - "127.0.0.1:5173:80"
+      - "127.0.0.1:443:443"
+    volumes:
+      - tlscerts:/certs:ro
     depends_on:
-      - backend
+      backend:
+        condition: service_started
+      certs:
+        condition: service_completed_successfully
 
   certs:
     image: alpine:3.20
@@ -51,7 +59,7 @@ services:
       - ./prometheus/web.yml:/etc/prometheus/web.yml:ro
       - tlscerts:/certs:ro
     ports:
-      - "9090:9090"
+      - "127.0.0.1:9090:9090"
     depends_on:
       backend:
         condition: service_started
@@ -73,7 +81,7 @@ services:
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
       - tlscerts:/certs:ro
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     depends_on:
       prometheus:
         condition: service_started
@@ -88,7 +96,7 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: web_backend_db
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:

@@ -40,7 +40,32 @@ export const useMigration = (id: string, mid?: string) =>
   useQuery({
     queryKey: ["db", id, "migrations", mid], retry: false, enabled: !!mid,
     queryFn: () => api<Migration>(`${base(id)}/migrations/${enc(mid!)}`),
+    refetchInterval: (q) => (q.state.data?.batch_status === "running" ? 1500 : false),
   });
+
+export const useCancelBatchMigration = (id: string) => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (mid: string) => api(`${base(id)}/migrations/${enc(mid)}/batch/cancel`, { method: "POST" }),
+    onSettled: () => qc.invalidateQueries({ queryKey: ["db", id], predicate: (q) => q.queryKey[2] === "migrations" || q.queryKey[2] === "change-requests" }),
+  });
+};
+
+export const useRevertBatchMigration = (id: string) => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (mid: string) => api(`${base(id)}/migrations/${enc(mid)}/batch/revert`, { method: "POST" }),
+    onSettled: () => qc.invalidateQueries({ queryKey: ["db", id], predicate: (q) => q.queryKey[2] === "migrations" || q.queryKey[2] === "change-requests" }),
+  });
+};
+
+export const useResumeBatchMigration = (id: string) => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (mid: string) => api(`${base(id)}/migrations/${enc(mid)}/batch/resume`, { method: "POST" }),
+    onSettled: () => qc.invalidateQueries({ queryKey: ["db", id], predicate: (q) => q.queryKey[2] === "migrations" || q.queryKey[2] === "jobs" }),
+  });
+};
 
 export const useSaveMigration = (id: string) => {
   const qc = useQueryClient();

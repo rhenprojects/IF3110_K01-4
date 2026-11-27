@@ -37,7 +37,7 @@ sh scripts/invoker.sh test-all    # unit + integration + API smoke
 | 16 | Assign group ke database dan level akses `view`/`edit` | `TestIntegrationGroupAccessAndAuthorization`, `TestIntegrationLevelMatrix` | PASS |
 | 17 | Effective access gabungan beberapa group (edit menang) dan pencabutan akses | `TestIntegrationLevelMatrix`, `TestIntegrationUserConnectionAccess` | PASS |
 | 18 | Enforcement View Only: user hanya bisa melihat dan test koneksi, update ditolak | `TestIntegrationUserConnectionAccess`, API smoke test | PASS |
-| 19 | Enforcement View + Edit: user bisa update koneksi | `TestIntegrationUserConnectionAccess`, API smoke test | PASS |
+| 19 | Update koneksi (host/port/database/user/password/SSL) hanya Platform Admin; user View + Edit tetap ditolak (404/405) | `TestIntegrationUserConnectionAccess`, API smoke test | PASS |
 | 20 | Unit dan integration test tersedia dan dapat dijalankan terpisah | `scripts/invoker.sh test-db` | PASS |
 | 21 | Viewer schema: schema, table/view, column (tipe, nullable, default, PK), constraint, index; read-only + statement timeout; schema sistem disembunyikan | `TestIntegrationSchema`, `TestIntegrationViewerAccessControl`, `TestTranslateTargetError` | PASS |
 | 22 | Viewer data: paging limit/offset + total, urut primary key, NULL/numeric/uuid, nama tabel dengan spasi, nama tabel injection ditolak, target tidak terjangkau | `TestIntegrationRows`, `TestIntegrationRowsRejectsUnknownAndInjectedTables`, `TestIntegrationUnreachableTarget`, `TestBuildRowsQueryQuotesIdentifiers`, `TestJSONValue` | PASS |
@@ -51,3 +51,14 @@ sh scripts/invoker.sh test-all    # unit + integration + API smoke
 
 - PASS: 27
 - FAIL: 0
+
+## Milestone 2
+
+| # | Item | Bukti | Status |
+|---|---|---|---|
+| 28 | Batch per potongan row: batch_size, cursor, transaction per chunk, checkpoint target, resume, cancel/revert | `TestIntegrationChunkedMigration*`, `scripts/chunked-batch.sh` | PASS |
+| 29 | Batch lewat approval + queue; stop dan revert memakai change request `revert` | `TestIntegrationChunkedMigration*`, API smoke test | PASS |
+| 30 | Dataset 1 juta row: baseline > 1 detik dan batch API | `docs/BATCH_TESTING.md`, `scripts/chunked-batch.sh` | PASS |
+| 31 | SPA diuji di browser (login + admin users), CSP tidak memblokir | `frontend/e2e/smoke.spec.ts`, `npm run test:e2e` | PASS |
+| 32 | HTTPS lokal + HSTS | `https://localhost`, header `Strict-Transport-Security` | PASS |
+| 33 | Audit log login dan mutasi API | `GET /admin/audit`, tabel `audit_logs` | PASS |

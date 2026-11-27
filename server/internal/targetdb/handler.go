@@ -14,6 +14,13 @@ type Handler struct {
 	svc *Service
 }
 
+// connectionSummary menyembunyikan detail infrastruktur dari user biasa.
+type connectionSummary struct {
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	DBName string `json:"db_name"`
+}
+
 func NewHandler(svc *Service) *Handler {
 	return &Handler{svc: svc}
 }
@@ -38,7 +45,6 @@ func (h *Handler) RegisterUserRoutes(router fiber.Router) {
 
 	g.Get("/", h.ListAccessible)
 	g.Get("/:id", h.GetAccessible)
-	g.Put("/:id", h.UpdateAccessible)
 	g.Post("/:id/test", h.TestSavedAccessible)
 }
 
@@ -109,7 +115,15 @@ func (h *Handler) TestUnsaved(c *fiber.Ctx) error {
 }
 
 func (h *Handler) TestSaved(c *fiber.Ctx) error {
-	version, err := h.svc.TestSaved(c.UserContext(), c.Params("id"))
+	var in *ConnectionInput
+	if len(c.Body()) > 0 {
+		var body ConnectionInput
+		if err := c.BodyParser(&body); err != nil {
+			return httpx.Error(c, fiber.StatusBadRequest, "Invalid request body")
+		}
+		in = &body
+	}
+	version, err := h.svc.TestSaved(c.UserContext(), c.Params("id"), in)
 	if err != nil {
 		return writeError(c, err)
 	}
@@ -149,7 +163,11 @@ func (h *Handler) ListAccessible(c *fiber.Ctx) error {
 	if err != nil {
 		return writeError(c, err)
 	}
-	return c.JSON(models.ConnectionListResponse{Connections: conns})
+	items := make([]connectionSummary, len(conns))
+	for i, conn := range conns {
+		items[i] = connectionSummary{ID: conn.ID, Name: conn.Name, DBName: conn.DBName}
+	}
+	return c.JSON(fiber.Map{"connections": items})
 }
 
 func (h *Handler) GetAccessible(c *fiber.Ctx) error {
@@ -160,18 +178,11 @@ func (h *Handler) GetAccessible(c *fiber.Ctx) error {
 	if !allowed {
 		return writeError(c, ErrNotFound)
 	}
-	return h.Get(c)
-}
-
-func (h *Handler) UpdateAccessible(c *fiber.Ctx) error {
-	allowed, err := h.svc.CanEdit(c.UserContext(), authctx.UserID(c), c.Params("id"))
+	conn, err := h.svc.Get(c.UserContext(), c.Params("id"))
 	if err != nil {
 		return writeError(c, err)
 	}
-	if !allowed {
-		return writeError(c, ErrNotFound)
-	}
-	return h.Update(c)
+	return c.JSON(connectionSummary{ID: conn.ID, Name: conn.Name, DBName: conn.DBName})
 }
 
 func (h *Handler) TestSavedAccessible(c *fiber.Ctx) error {
@@ -182,5 +193,11 @@ func (h *Handler) TestSavedAccessible(c *fiber.Ctx) error {
 	if !allowed {
 		return writeError(c, ErrNotFound)
 	}
-	return h.TestSaved(c)
+	// User biasa hanya mengetes konfigurasi tersimpan; override host/credential
+	// dari body hanya tersedia untuk admin lewat /admin/connections/:id/test.
+	version, err := h.svc.TestSaved(c.UserContext(), c.Params("id"), nil)
+	if err != nil {
+		return writeError(c, err)
+	}
+	return c.JSON(models.ConnectionTestResponse{Status: "ok", ServerVersion: version})
 }

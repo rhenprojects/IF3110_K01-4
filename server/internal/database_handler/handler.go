@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"web_backend/internal/authctx"
@@ -51,7 +52,10 @@ func NewHandlerWithEngine(db *gorm.DB, svc *targetdb.Service, eng *engine.Engine
 	}
 	h := &Handler{db: db, svc: svc, engine: eng}
 	if db != nil && eng != nil {
-		h.review = review.New(db, review.Deps{Enqueue: reviewEnqueue(eng), Validate: engine.ValidateDefinition})
+		h.review = review.New(db, review.Deps{
+			Enqueue: reviewEnqueue(eng), Validate: engine.ValidateDefinition,
+			DenySelfApproval: strings.EqualFold(os.Getenv("APP_ENV"), "production") && os.Getenv("ALLOW_SELF_APPROVAL") != "true",
+		})
 	}
 	return h
 }
@@ -83,6 +87,9 @@ func (h *Handler) RegisterRoutes(router fiber.Router) {
 	g.Put("/:id/migrations/:mid", h.UpdateMigration)
 	g.Get("/:id/migrations/:mid/executions", h.ListMigrationExecutions)
 	g.Post("/:id/migrations/:mid/change-requests", h.SubmitChangeRequest)
+	g.Post("/:id/migrations/:mid/batch/cancel", h.CancelBatchMigration)
+	g.Post("/:id/migrations/:mid/batch/resume", h.ResumeBatchMigration)
+	g.Post("/:id/migrations/:mid/batch/revert", h.RevertBatchMigration)
 	g.Get("/:id/change-requests", h.ListChangeRequests)
 	g.Post("/:id/change-requests/:rid/approve", h.ApproveChangeRequest)
 	g.Post("/:id/change-requests/:rid/reject", h.RejectChangeRequest)
@@ -98,17 +105,22 @@ func (h *Handler) List(c *fiber.Ctx) error {
 		return h.writeError(c, err)
 	}
 	userID := authctx.UserID(c)
+	ids := make([]string, len(conns))
+	for i, conn := range conns {
+		ids[i] = conn.ID
+	}
+	access, err := authz.AccessFor(c.UserContext(), h.db, userID, ids)
+	if err != nil {
+		return h.writeError(c, err)
+	}
 	items := make([]models.DatabaseItem, 0, len(conns))
 	for _, conn := range conns {
-		level, err := authz.Level(c.UserContext(), h.db, userID, conn.ID)
-		if err != nil {
-			return h.writeError(c, err)
-		}
-		if level == models.AccessNone {
+		a := access[conn.ID]
+		if a.Level == models.AccessNone {
 			continue
 		}
 		items = append(items, models.DatabaseItem{
-			ID: conn.ID, Name: conn.Name, DBName: conn.DBName, Level: level,
+			ID: conn.ID, Name: conn.Name, DBName: conn.DBName, Level: a.Level, CanBatch: a.CanBatch,
 		})
 	}
 	return c.JSON(models.DatabaseListResponse{Databases: items})
@@ -119,8 +131,12 @@ func (h *Handler) Get(c *fiber.Ctx) error {
 	if err != nil {
 		return h.writeError(c, err)
 	}
+	access, err := authz.AccessFor(c.UserContext(), h.db, authctx.UserID(c), []string{conn.ID})
+	if err != nil {
+		return h.writeError(c, err)
+	}
 	return c.JSON(models.DatabaseItem{
-		ID: conn.ID, Name: conn.Name, DBName: conn.DBName, Level: level,
+		ID: conn.ID, Name: conn.Name, DBName: conn.DBName, Level: level, CanBatch: access[conn.ID].CanBatch,
 	})
 }
 
@@ -241,6 +257,7 @@ func (h *Handler) CreateMigration(c *fiber.Ctx) error {
 		SQLDown:            input.SQLDown,
 		Irreversible:       input.Irreversible,
 		IrreversibleReason: input.IrreversibleReason,
+		BatchSize:          input.BatchSize,
 		Revision:           1,
 		Status:             models.MigrationDraft,
 		Error:              "",
@@ -285,6 +302,7 @@ func (h *Handler) UpdateMigration(c *fiber.Ctx) error {
 	migration.SQLDown = input.SQLDown
 	migration.Irreversible = input.Irreversible
 	migration.IrreversibleReason = input.IrreversibleReason
+	migration.BatchSize = input.BatchSize
 	migration.Revision++
 	if err := h.db.WithContext(c.UserContext()).Save(migration).Error; err != nil {
 		return h.writeError(c, err)
@@ -293,6 +311,72 @@ func (h *Handler) UpdateMigration(c *fiber.Ctx) error {
 		return h.writeError(c, err)
 	}
 	return c.JSON(migration)
+}
+
+func (h *Handler) CancelBatchMigration(c *fiber.Ctx) error {
+	conn, _, err := h.accessible(c, true)
+	if err != nil {
+		return h.writeError(c, err)
+	}
+	m, err := h.findMigration(c, conn.ID, c.Params("mid"))
+	if err != nil {
+		return h.writeError(c, err)
+	}
+	if m.BatchSize <= 0 {
+		return httpx.ValidationError(c, "batch_size", "migration is not a batch migration")
+	}
+	// Batch yang masih berjalan dihentikan dulu di batas potongan. Revert
+	// dilakukan lewat change request + queue setelah berhenti.
+	if m.BatchStatus == "running" {
+		if err := h.db.WithContext(c.UserContext()).Model(&models.Migration{}).
+			Where("id = ?", m.ID).Update("batch_cancel_requested", true).Error; err != nil {
+			return h.writeError(c, err)
+		}
+		return c.Status(fiber.StatusAccepted).JSON(fiber.Map{"status": "stop_requested"})
+	}
+	cr, err := h.review.Submit(c.UserContext(), authctx.UserID(c), conn.ID, m.ID, models.JobKindRevert)
+	if err != nil {
+		return h.writeError(c, err)
+	}
+	return c.Status(fiber.StatusCreated).JSON(cr)
+}
+
+func (h *Handler) ResumeBatchMigration(c *fiber.Ctx) error {
+	conn, _, err := h.accessible(c, true)
+	if err != nil {
+		return h.writeError(c, err)
+	}
+	m, err := h.findMigration(c, conn.ID, c.Params("mid"))
+	if err != nil {
+		return h.writeError(c, err)
+	}
+	if m.BatchSize <= 0 || m.BatchRunID == nil {
+		return httpx.Error(c, fiber.StatusConflict, "migration has no batch checkpoint to resume")
+	}
+	job, err := h.engine.EnqueueResume(c.UserContext(), conn.ID, m.ID, authctx.UserID(c))
+	if err != nil {
+		return h.writeError(c, err)
+	}
+	return c.Status(fiber.StatusAccepted).JSON(job)
+}
+
+func (h *Handler) RevertBatchMigration(c *fiber.Ctx) error {
+	conn, _, err := h.accessible(c, true)
+	if err != nil {
+		return h.writeError(c, err)
+	}
+	m, err := h.findMigration(c, conn.ID, c.Params("mid"))
+	if err != nil {
+		return h.writeError(c, err)
+	}
+	if m.BatchSize <= 0 || m.BatchRunID == nil {
+		return httpx.ValidationError(c, "batch_size", "migration is not a batch migration")
+	}
+	cr, err := h.review.Submit(c.UserContext(), authctx.UserID(c), conn.ID, m.ID, models.JobKindRevert)
+	if err != nil {
+		return h.writeError(c, err)
+	}
+	return c.Status(fiber.StatusCreated).JSON(cr)
 }
 
 func (h *Handler) ListJobs(c *fiber.Ctx) error {
@@ -342,6 +426,7 @@ type migrationInput struct {
 	SQLDown            string `json:"sql_down"`
 	Irreversible       bool   `json:"irreversible"`
 	IrreversibleReason string `json:"irreversible_reason"`
+	BatchSize          int    `json:"batch_size"`
 }
 
 // parseMigrationInput hanya mewajibkan nama dan SQL up; draft boleh belum punya SQL down
@@ -357,6 +442,8 @@ func parseMigrationInput(c *fiber.Ctx) (migrationInput, error) {
 		return req, &validationError{"name", "required, max 200 characters"}
 	case strings.TrimSpace(req.SQL) == "":
 		return req, &validationError{"sql", "required"}
+	case req.BatchSize < 0 || req.BatchSize > 1000000:
+		return req, &validationError{"batch_size", "must be between 0 and 1000000"}
 	}
 	if !req.Irreversible {
 		req.IrreversibleReason = ""
@@ -475,9 +562,13 @@ func (h *Handler) writeError(c *fiber.Ctx, err error) error {
 		return httpx.Error(c, fiber.StatusBadRequest, err.Error())
 	case errors.Is(err, review.ErrMigrationNotFound), errors.Is(err, review.ErrRequestNotFound):
 		return httpx.Error(c, fiber.StatusNotFound, err.Error())
+	case errors.Is(err, review.ErrSelfApproval), errors.Is(err, review.ErrNotRevertible):
+		return httpx.Error(c, fiber.StatusConflict, err.Error())
 	case errors.Is(err, review.ErrNotLeader), errors.Is(err, review.ErrEditAccessRequired):
 		return httpx.Error(c, fiber.StatusForbidden, err.Error())
 	case isReviewConflict(err):
+		return httpx.Error(c, fiber.StatusConflict, err.Error())
+	case errors.Is(err, review.ErrBatchRevert):
 		return httpx.Error(c, fiber.StatusConflict, err.Error())
 	case errors.Is(err, review.ErrDispatchFailed):
 		log.Printf("[database] %v", err)

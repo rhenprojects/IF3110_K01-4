@@ -15,21 +15,18 @@ export default function DatabaseLayout() {
   const db = q.data;
   return (
     <div>
-      <Banner icon={<DatabaseIcon />} title={db.name}
-        eyebrow={<Link to="/databases" className="hover:underline">← Semua database</Link>}
-        meta={<>
-          <span className="rounded-full bg-white/15 px-2.5 py-0.5 font-mono text-xs">{db.db_name}</span>
-          <span className="rounded-full bg-white/15 px-2.5 py-0.5 text-xs font-medium">{db.level === "edit" ? "View + Edit" : "View Only"}</span>
-        </>}
-        caption={db.level === "edit" ? "Lihat struktur dan data, lalu ajukan migration untuk mengubahnya." : "Kamu bisa melihat struktur, data, dan riwayat perubahan database ini."}>
-        <nav className="flex gap-1 overflow-x-auto">
-          <NavLink to="." end className={tab}>Schema & Data</NavLink>
-          <NavLink to="migrations" className={({ isActive }) => tab({ isActive: isActive && !pathname.includes("/migrations/batches") })}>Migrations</NavLink>
-          <NavLink to="history" className={tab}>Riwayat eksekusi</NavLink>
-          <NavLink to="queue" className={tab}>Queue</NavLink>
-          <NavLink to="migrations/batches" className={tab}>Batch</NavLink>
-        </nav>
-      </Banner>
+      <p className="mb-1 text-sm text-slate-500"><Link to="/databases" className="hover:underline">Databases</Link> /</p>
+      <div className="mb-4 flex flex-wrap items-center gap-3">
+        <h1 className="min-w-0 break-words text-xl font-semibold">{db.name}</h1>
+        <span className="text-sm text-slate-500">{db.db_name}</span>
+        <LevelBadge level={db.level} />
+      </div>
+      <nav className="mb-6 flex overflow-x-auto border-b">
+        <NavLink to="." end className={tab}>Schema & Data</NavLink>
+        <NavLink to="migrations" end className={tab}>Migrations</NavLink>
+        <NavLink to="history" className={tab}>Riwayat eksekusi</NavLink>
+        <NavLink to="queue" className={tab}>Queue</NavLink>
+      </nav>
       <Outlet context={db} />
     </div>
   );

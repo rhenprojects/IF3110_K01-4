@@ -189,10 +189,22 @@ func (s *Service) Test(ctx context.Context, in ConnectionInput) (string, error) 
 	return TestConnection(ctx, in.params())
 }
 
-func (s *Service) TestSaved(ctx context.Context, id string) (string, error) {
-	params, err := s.paramsFor(ctx, id)
+// TestSaved menguji koneksi tersimpan. Kalau in tidak nil, nilai form menimpa
+// konfigurasi tersimpan; password kosong memakai password yang tersimpan.
+func (s *Service) TestSaved(ctx context.Context, id string, in *ConnectionInput) (string, error) {
+	saved, err := s.paramsFor(ctx, id)
 	if err != nil {
 		return "", err
+	}
+	if in == nil {
+		return TestConnection(ctx, saved)
+	}
+	if err := in.normalize(false); err != nil {
+		return "", err
+	}
+	params := in.params()
+	if params.Password == "" {
+		params.Password = saved.Password
 	}
 	return TestConnection(ctx, params)
 }
@@ -242,13 +254,17 @@ func (s *Service) ListAccessible(ctx context.Context, userID string) ([]models.D
 	if err != nil {
 		return nil, err
 	}
+	ids := make([]string, len(conns))
+	for i, conn := range conns {
+		ids[i] = conn.ID
+	}
+	access, err := authz.AccessFor(ctx, s.db, userID, ids)
+	if err != nil {
+		return nil, err
+	}
 	visible := make([]models.DBConnection, 0, len(conns))
 	for _, conn := range conns {
-		ok, err := s.CanView(ctx, userID, conn.ID)
-		if err != nil {
-			return nil, err
-		}
-		if ok {
+		if access[conn.ID].Level != models.AccessNone {
 			visible = append(visible, conn)
 		}
 	}

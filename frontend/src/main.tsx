@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider } from "react-router-dom";
 import { AuthProvider } from "./features/auth/auth";
 import { ToastProvider } from "./components/toast";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { router } from "./app/router";
 import { shouldRetry } from "./lib/retry";
 import "@fontsource-variable/literata";
@@ -19,13 +20,15 @@ async function boot() {
   }
   createRoot(document.getElementById("root")!).render(
     <StrictMode>
-      <QueryClientProvider client={qc}>
-        <ToastProvider>
-          <AuthProvider>
-            <RouterProvider router={router} />
-          </AuthProvider>
-        </ToastProvider>
-      </QueryClientProvider>
+      <ErrorBoundary>
+        <QueryClientProvider client={qc}>
+          <ToastProvider>
+            <AuthProvider>
+              <RouterProvider router={router} />
+            </AuthProvider>
+          </ToastProvider>
+        </QueryClientProvider>
+      </ErrorBoundary>
     </StrictMode>,
   );
 }

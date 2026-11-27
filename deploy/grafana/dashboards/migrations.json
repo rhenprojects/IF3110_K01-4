@@ -23,12 +23,13 @@
     },
     {
       "type": "timeseries",
-      "title": "Durasi item p50 / p95",
+      "title": "Durasi item p50 / p95 / p99",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
-        { "expr": "histogram_quantile(0.50, sum by (le) (rate(migration_item_duration_seconds_bucket[5m])))", "legendFormat": "p50" },
-        { "expr": "histogram_quantile(0.95, sum by (le) (rate(migration_item_duration_seconds_bucket[5m])))", "legendFormat": "p95" }
+        { "expr": "histogram_quantile(0.50, sum by (le) (migration_item_duration_seconds_bucket))", "legendFormat": "p50" },
+        { "expr": "histogram_quantile(0.95, sum by (le) (migration_item_duration_seconds_bucket))", "legendFormat": "p95" },
+        { "expr": "histogram_quantile(0.99, sum by (le) (migration_item_duration_seconds_bucket))", "legendFormat": "p99" }
       ]
     },
     {
@@ -36,7 +37,7 @@
       "title": "Durasi batch p95",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [{ "expr": "histogram_quantile(0.95, sum by (le) (rate(migration_batch_duration_seconds_bucket[5m])))", "legendFormat": "p95" }]
+      "targets": [{ "expr": "histogram_quantile(0.95, sum by (le) (migration_batch_duration_seconds_bucket))", "legendFormat": "p95" }]
     },
     {
       "type": "stat",

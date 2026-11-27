@@ -120,23 +120,28 @@ func readTables(ctx context.Context, q querier, schema string) ([]models.SchemaT
 		return nil, err
 	}
 
+	columns, err := readColumnsBySchema(ctx, q, schema)
+	if err != nil {
+		return nil, err
+	}
+	constraints, err := readConstraintsBySchema(ctx, q, schema)
+	if err != nil {
+		return nil, err
+	}
+	indexes, err := readIndexesBySchema(ctx, q, schema)
+	if err != nil {
+		return nil, err
+	}
 	tables := make([]models.SchemaTable, 0, len(relations))
 	for _, rel := range relations {
 		tableType := "table"
 		if rel.Kind == "v" || rel.Kind == "m" {
 			tableType = "view"
 		}
-		table := models.SchemaTable{Name: rel.Name, Type: tableType}
-		if table.Columns, err = readColumns(ctx, q, schema, rel.Name); err != nil {
-			return nil, err
-		}
-		if table.Constraints, err = readConstraints(ctx, q, schema, rel.Name); err != nil {
-			return nil, err
-		}
-		if table.Indexes, err = readIndexes(ctx, q, schema, rel.Name); err != nil {
-			return nil, err
-		}
-		tables = append(tables, table)
+		tables = append(tables, models.SchemaTable{
+			Name: rel.Name, Type: tableType,
+			Columns: columns[rel.Name], Constraints: constraints[rel.Name], Indexes: indexes[rel.Name],
+		})
 	}
 	return tables, nil
 }
@@ -253,9 +258,14 @@ func readRows(ctx context.Context, q querier, schema, table string, limit, offse
 		return nil, err
 	}
 
-	var total int64
-	if err := q.QueryRow(ctx, "SELECT count(*) FROM "+pgx.Identifier{schema, table}.Sanitize()).Scan(&total); err != nil {
+	total, estimated, err := estimatedRows(ctx, q, schema, table)
+	if err != nil {
 		return nil, err
+	}
+	if !estimated {
+		if err := q.QueryRow(ctx, "SELECT count(*) FROM "+pgx.Identifier{schema, table}.Sanitize()).Scan(&total); err != nil {
+			return nil, err
+		}
 	}
 
 	names := make([]string, len(columns))
@@ -290,6 +300,27 @@ func readRows(ctx context.Context, q querier, schema, table string, limit, offse
 }
 
 // buildRowsQuery menyusun SELECT dengan semua identifier di-quote
+// estimatedRows memakai reltuples untuk tabel besar agar viewer tidak selalu
+// menjalankan COUNT(*) penuh. Tabel kecil/baru tetap memakai count eksak.
+func estimatedRows(ctx context.Context, q querier, schema, table string) (int64, bool, error) {
+	var reltuples float64
+	var kind string
+	err := q.QueryRow(ctx, `
+		SELECT c.reltuples, c.relkind::text
+		FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+		WHERE n.nspname = $1 AND c.relname = $2`, schema, table).Scan(&reltuples, &kind)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, false, nil
+		}
+		return 0, false, err
+	}
+	if (kind == "r" || kind == "p") && reltuples >= 10000 {
+		return int64(reltuples), true, nil
+	}
+	return 0, false, nil
+}
+
 func buildRowsQuery(schema, table string, columns, orderBy []string) string {
 	quoted := make([]string, len(columns))
 	for i, col := range columns {

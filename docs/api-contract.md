@@ -145,10 +145,11 @@ Artinya admin yang ingin melihat atau mengubah suatu database harus menjadikan d
 ### 3.7 Aturan migration
 
 - **Satu riwayat linear per database.** Versi hanya diberikan ke migration yang **berhasil**, urut `1, 2, 3, ...` tanpa lompatan.
-- Migration punya 3 status:
+- Migration punya status:
   - `draft`: baru disimpan, belum dijalankan. Boleh diedit.
   - `success`: sudah dijalankan dan di-commit. Punya nomor versi. Tidak boleh diubah.
-  - `failed`: dijalankan tapi gagal dan di-rollback. Tidak punya versi. Tidak boleh dijalankan ulang. Kalau mau mencoba lagi, buat migration baru (SQL-nya bisa disalin dari yang gagal).
+  - `failed`: dijalankan tapi gagal dan di-rollback. Tidak punya versi.
+  - `partial`: batch berhenti/gagal di tengah; sebagian potongan sudah committed. Bisa dilanjutkan dari checkpoint atau dibatalkan/revert.
 - Saat dijalankan, seluruh SQL berjalan dalam **satu transaction**: semua berhasil maka `COMMIT`, ada satu yang gagal maka `ROLLBACK`.
 - Dalam satu database, **hanya satu migration yang boleh berjalan pada satu waktu**. Kalau ada yang sedang berjalan, jawab `409`.
 - Riwayat migration **tidak bisa dihapus**.
@@ -293,7 +294,10 @@ Aturan input:
 | `PUT /admin/connections/:id` | Ubah. Response `200` + `Connection` |
 | `DELETE /admin/connections/:id` | Hapus. Response `204` (lihat bagian 3.8) |
 | `POST /admin/connections/test` | Tes koneksi dari data form yang **belum disimpan**. Body sama seperti `POST` |
-| `POST /admin/connections/:id/test` | Tes koneksi yang **sudah disimpan** (memakai password tersimpan). Tanpa body |
+| `POST /admin/connections/:id/test` | Tes koneksi yang **sudah disimpan**. Tanpa body: memakai konfigurasi tersimpan. Dengan body (bentuk sama seperti `PUT`): nilai form menimpa konfigurasi tersimpan, dan password kosong memakai password tersimpan |
+| `GET /admin/audit?limit=100` | Audit log mutasi API dan login (tanpa body/password). Hanya Platform Admin |
+
+Mengubah koneksi (host, port, nama database, username, password, SSL) hanya boleh dilakukan **Platform Admin**. User dengan akses `view` atau `edit` hanya bisa melihat dan mengetes koneksi yang boleh diaksesnya; `PUT /connections/:id` untuk user biasa dijawab `404/405`.
 
 Response tes berhasil (`200`): `{ "status": "ok", "server_version": "PostgreSQL 16.4 ..." }`
 
@@ -315,7 +319,7 @@ Error 502/504 yang sama juga muncul di endpoint viewer dan migration (bagian 8 d
 
 Bagian ini dipakai semua user yang sudah login. Hasilnya dibatasi oleh **akses efektif** user (bagian 3.4).
 
-Untuk user biasa, detail koneksi seperti `host`, `port`, dan `username` **tidak ditampilkan** supaya infrastruktur tidak terbuka. Hanya endpoint admin (bagian 7) yang menampilkannya.
+Untuk user biasa, detail koneksi seperti `host`, `port`, dan `username` **tidak ditampilkan** supaya infrastruktur tidak terbuka. `GET /connections` dan `GET /connections/:id` hanya mengembalikan `id`, `name`, dan `db_name`. Hanya endpoint admin (bagian 7) yang menampilkannya. `POST /connections/:id/test` untuk user biasa selalu memakai konfigurasi tersimpan; override body hanya untuk admin.
 
 Aturan penolakan:
 
@@ -330,13 +334,15 @@ Daftar database yang boleh diakses user, lengkap dengan level efektifnya:
 ```json
 {
   "databases": [
-    { "id": "…", "name": "toko", "db_name": "toko", "level": "edit" },
-    { "id": "…", "name": "hr",   "db_name": "hr",   "level": "view" }
+    { "id": "…", "name": "toko", "db_name": "toko", "level": "edit", "can_batch": true },
+    { "id": "…", "name": "hr",   "db_name": "hr",   "level": "view", "can_batch": false }
   ]
 }
 ```
 
 User yang tidak punya akses ke database mana pun mendapat `{ "databases": [] }`.
+
+`can_batch` bernilai `true` hanya jika user adalah Team Leader dari **setiap** group yang punya akses ke database itu. Field ini dipakai UI untuk menampilkan tombol eksekusi batch.
 
 ### `GET /databases/:id`
 
@@ -377,7 +383,7 @@ Seluruh struktur database dalam satu response (schema bawaan sistem seperti `pg_
 
 ### `GET /databases/:id/tables/:schema/:table/rows?limit=50&offset=0`
 
-Isi tabel, per halaman:
+Isi tabel, per halaman. Untuk tabel besar (≥10.000 row) `total` dapat berupa estimasi dari statistik PostgreSQL, bukan `COUNT(*)` penuh. `limit` 1–200.
 
 ```json
 {
@@ -418,14 +424,22 @@ Bentuk data `Migration`:
   "created_at": "…",
   "updated_at": "…",
   "executed_at": "…",
-  "duration_ms": 42
+  "duration_ms": 42,
+  "batch_size": 0,
+  "batch_run_id": null,
+  "batch_status": "",
+  "batch_cursor": 0,
+  "batch_rows": 0,
+  "batch_chunks": 0,
+  "batch_cancel_requested": false
 }
 ```
 
 Catatan field:
 
-- `version`, `executed_by`, `executed_by_name`, `executed_at`, `duration_ms` bernilai `null` untuk migration `draft` (dan `version` juga `null` untuk `failed`).
-- `error` berisi pesan dari Postgres kalau `status` adalah `failed`.
+- `version`, `executed_by`, `executed_by_name`, `executed_at`, `duration_ms` bernilai `null` untuk migration `draft` (dan `version` juga `null` untuk `failed`/`partial`).
+- `error` berisi pesan dari Postgres kalau `status` adalah `failed` atau `partial`.
+- `batch_*` hanya berarti jika `batch_size > 0`. `batch_status`: `running`, `success`, `reverted`, `partially_reverted`, atau kosong.
 - `created_by_name` dan `executed_by_name` ditambahkan oleh backend supaya user biasa bisa melihat nama pelaksana tanpa memanggil endpoint admin.
 
 Izin:
@@ -437,18 +451,38 @@ Izin:
 |---|---|
 | `GET /databases/:id/migrations` | Riwayat. Response `{ "migrations": [Migration, ...] }`, urut dari yang terbaru dibuat. Isinya semua status |
 | `GET /databases/:id/migrations/:mid` | Detail satu migration |
-| `POST /databases/:id/migrations` | Buat draft. Body `{ "name": "…", "sql": "…" }`. Response `201` + `Migration` berstatus `draft` |
-| `PUT /databases/:id/migrations/:mid` | Ubah draft. Body `{ "name": "…", "sql": "…" }`. Response `200`. `409` kalau statusnya bukan `draft` |
+| `POST /databases/:id/migrations` | Buat draft. Body `{ "name": "…", "sql": "…", "sql_down": "…", "batch_size": 0 }`. Response `201` + `Migration` berstatus `draft` |
+| `PUT /databases/:id/migrations/:mid` | Ubah draft. Body sama seperti `POST`. Response `200`. `409` kalau statusnya bukan `draft` |
+| `POST /databases/:id/migrations/:mid/batch/cancel` | Jika batch sedang berjalan, minta worker berhenti di batas potongan (`202`). Jika sudah `success`/`partial`, membuat change request `revert` (`201`). `400` kalau bukan batch |
+| `POST /databases/:id/migrations/:mid/batch/resume` | Lanjutkan batch dari checkpoint terakhir dan masukkan job baru ke queue. Response `202` + job; `409` kalau tidak ada checkpoint |
+| `POST /databases/:id/migrations/:mid/batch/revert` | Buat change request `revert` untuk batch sukses/partial. Setelah leader menyetujui, worker queue menjalankan SQL down dari chunk terakhir. Response `201` + ChangeRequest |
 
-Aturan input `POST` dan `PUT`: `name` wajib, maksimal 200 karakter. `sql` wajib, tidak boleh kosong.
+Aturan input `POST` dan `PUT`: `name` wajib, maksimal 200 karakter. `sql` wajib, tidak boleh kosong. `sql_down` wajib kecuali `irreversible=true`. `batch_size` 0–1.000.000.
+
+### Batch per potongan row
+
+Migration dengan `batch_size > 0` dieksekusi per potongan row oleh worker queue, bukan satu statement raksasa. Kontrak SQL:
+
+- `sql` harus berupa `UPDATE`, `DELETE`, atau `WITH` yang memakai `:last_id` dan `:batch_size` serta `ORDER BY id`; platform menambahkan `RETURNING id` bila belum ada. Contoh:
+  `UPDATE big SET ... WHERE id IN (SELECT id FROM big WHERE id > :last_id ORDER BY id LIMIT :batch_size)`
+- `sql_down` harus memakai `:from_id` dan `:to_id` untuk membalik satu potongan. Contoh:
+  `UPDATE big SET ... WHERE id >= :from_id AND id <= :to_id`
+- Setiap potongan berjalan dalam transaction sendiri. Checkpoint `(execution_id, run_id, chunk_no, from_id, to_id, cursor)` ditulis di database target (`_dbmp.batch_runs`, `_dbmp.batch_chunks`) **dalam transaction yang sama** dengan data.
+- `batch_size > 0` tidak boleh `irreversible` karena cancel membutuhkan `sql_down`.
+- Approval dan queue tetap wajib: migration diajukan lewat change request, disetujui leader, lalu worker menjalankannya.
+- Cancel: berhenti di batas potongan, lalu SQL down dijalankan untuk chunk committed dari yang terakhir; status `batch_status` menjadi `reverted` atau `partially_reverted`, migration menjadi `partial`.
+- Resume: job baru membaca checkpoint target dan melanjutkan dari cursor terakhir.
+- Endpoint `/batches` lama (banyak migration) mengembalikan `410 Gone`; gunakan `batch_size` pada migration.
 
 ### Review dan approval (change request)
 
 Setiap perubahan (`up`, `rollback`, `forward`) diajukan sebagai change request dan harus disetujui leader dari **setiap group yang punya akses** ke database (`view` maupun `edit`). Setelah leader terakhir menyetujui, permintaan otomatis masuk queue dan `job_id` terisi. Satu leader yang memimpin beberapa group cukup menyetujui sekali. Satu migration hanya boleh punya satu change request yang sedang berjalan: menunggu review, sudah disetujui tetapi belum masuk queue, atau sudah masuk queue dengan job yang belum selesai.
 
+Di `APP_ENV=production`, leader **tidak boleh** menyetujui change request miliknya sendiri (respons `409`); set `ALLOW_SELF_APPROVAL=true` hanya bila kebijakan tim mengizinkan. Di production juga migration ditolak bila user database target adalah superuser.
+
 | Endpoint | Fungsi |
 |---|---|
-| `POST /databases/:id/migrations/:mid/change-requests` | Ajukan perubahan. Body `{ "kind": "up" \| "rollback" \| "forward" }`. Harus `edit`. Response `201` + `ChangeRequest` berstatus `pending_review` |
+| `POST /databases/:id/migrations/:mid/change-requests` | Ajukan perubahan. Body `{ "kind": "up" \| "rollback" \| "forward" \| "revert" }`. Harus `edit`. Response `201` + `ChangeRequest` berstatus `pending_review` |
 | `GET /databases/:id/change-requests?status=&limit=50` | Daftar change request, terbaru dulu. `status` opsional (`pending_review` \| `approved` \| `rejected`), nilai lain `400`. Response `{ "change_requests": [...] }`. Minimal `view` |
 | `GET /change-requests/pending?limit=50` | Inbox leader: permintaan di database mana pun yang menunggu keputusan user ini (user memimpin group yang punya akses ke database itu dan belum memutuskan), paling lama menunggu dulu. Kosong kalau user bukan leader. Response sama dengan daftar di atas |
 | `POST /databases/:id/change-requests/:rid/approve` | Setujui. Body opsional `{ "comment": "…" }`. Hanya leader group yang punya akses ke database ini |

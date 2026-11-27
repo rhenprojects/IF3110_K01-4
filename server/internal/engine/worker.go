@@ -26,6 +26,10 @@ WHERE id = (
 	  AND NOT EXISTS (
 		SELECT 1 FROM migration_jobs r
 		WHERE r.connection_id = j.connection_id AND r.status IN ('running', 'uncertain'))
+	  AND NOT EXISTS (
+		SELECT 1 FROM migrations pm
+		WHERE pm.connection_id = j.connection_id AND pm.status = 'partial'
+		  AND pm.batch_status <> 'reverted' AND pm.id <> j.migration_id)
 	ORDER BY j.created_at, j.id
 	LIMIT 1
 	FOR UPDATE SKIP LOCKED)
@@ -129,10 +133,10 @@ func (e *Engine) process(job *models.MigrationJob, workerID string) {
 		logger.InfoContext(ctx, "database lock not acquired, job requeued", "event", "lock.busy", "reason", reason)
 		return
 	}
-	defer  release()
+	defer release()
 	logger.InfoContext(ctx, "database lock acquired", "event", "lock.acquired")
 
-	stopHeartbeat := e.heartbeat(job.ID, workerID )
+	stopHeartbeat := e.heartbeat(job.ID, workerID)
 	m, res, err := e.execute(ctx, spec)
 	stopHeartbeat()
 	if err != nil {

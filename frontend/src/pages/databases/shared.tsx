@@ -24,6 +24,7 @@ const STATUS: Record<MigrationStatus, { tone: "neutral" | "amber" | "green" | "r
   approved: { tone: "green", label: "Disetujui" },
   success: { tone: "green", label: "Berhasil" },
   failed: { tone: "red", label: "Gagal (rollback)" },
+  partial: { tone: "amber", label: "Sebagian / checkpoint" },
 };
 export function StatusBadge({ status }: { status: MigrationStatus }) {
   return <Badge tone={STATUS[status].tone}>{STATUS[status].label}</Badge>;
@@ -52,7 +53,7 @@ export function JobStatusBadge({ status }: { status: JobStatus }) {
   return <Badge tone={JOB[status].tone}>{JOB[status].label}</Badge>;
 }
 
-export const KIND_LABEL: Record<JobKind, string> = { up: "Up", rollback: "Rollback", forward: "Forward" };
+export const KIND_LABEL: Record<JobKind, string> = { up: "Up", rollback: "Rollback", forward: "Forward", revert: "Revert batch" };
 
 //[badge] jenis eksekusi: rollback diberi warna peringatan agar mudah dibedakan di daftar
 const KIND_TONE: Record<JobKind, "neutral" | "amber" | "dark"> = { up: "neutral", rollback: "amber", forward: "dark" };

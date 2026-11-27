@@ -95,3 +95,10 @@ func TestSQLForUsesOriginalUpAndDown(t *testing.T) {
 		t.Error("sqlFor picked the wrong SQL")
 	}
 }
+
+func TestOptionsDefaultStatementTimeout(t *testing.T) {
+	o := Options{}.withDefaults()
+	if o.StatementTimeout != 5*time.Minute {
+		t.Errorf("StatementTimeout = %v, want 5m", o.StatementTimeout)
+	}
+}

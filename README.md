@@ -20,6 +20,7 @@ Login → Access Control → Pilih Database → Lihat Schema/Data
 - **Koneksi database**: koneksi ke satu atau lebih database PostgreSQL; password disimpan terenkripsi (AES-256-GCM); kegagalan koneksi ditangani dengan pesan yang aman.
 - **Database viewer**: schema, table, column, constraint, index, dan isi tabel dengan paging.
 - **Migration**: editor SQL up/down (atau ditandai irreversible), eksekusi asynchronous lewat queue dan worker dalam transaction (commit jika berhasil, rollback jika gagal), versi linear per database, dan riwayat lengkap (versi, SQL, pelaksana, waktu, status).
+- **Batch per potongan row**: migration data besar dijalankan per `batch_size` row, satu transaction per potongan, checkpoint `(execution, run, cursor)` ditulis di database target pada transaction yang sama. Bisa dilanjutkan dari checkpoint atau dibatalkan dengan SQL down terbalik (`partially_reverted`).
 - **Workflow & approval**: setiap perubahan (up, rollback, forward) harus disetujui Team Leader dari setiap group yang punya akses ke database tersebut sebelum masuk queue.
 - **Rollback & Forward**: membatalkan migration aktif terakhir dengan SQL down, lalu menerapkannya kembali dengan forward. Riwayat punya opsi **Hide rollback**.
 - **SPA responsif**: seluruh halaman dapat dipakai di desktop maupun mobile.
@@ -58,9 +59,11 @@ docker compose -f deploy/docker-compose.yml up --build
 
 | Layanan | Alamat |
 |---|---|
-| Aplikasi (frontend) | http://localhost (juga http://localhost:5173) |
+| Aplikasi (frontend) | http://localhost (juga https://localhost dan http://localhost:5173) |
 | Backend API | http://localhost:9000/api/v1 |
-| PostgreSQL platform | `localhost:5433`, user `postgres`, password `postgres` (port 5433 agar tidak bentrok dengan PostgreSQL lokal) |
+| PostgreSQL platform | `localhost:5432`, user `postgres`, password `postgres` |
+
+Semua port compose di-bind ke `127.0.0.1` (hanya bisa diakses dari mesin ini). Untuk demo dari perangkat lain, ubah binding di `deploy/docker-compose.yml` atau gunakan SSH tunnel; jangan buka port database/Grafana/Prometheus ke publik.
 
 Login awal: **`admin` / `admin-password`** (Platform Admin).
 
@@ -71,13 +74,14 @@ Menghentikan: `docker compose -f deploy/docker-compose.yml down`. Menghapus juga
 Platform butuh database target untuk dikelola. Contoh membuat database `toko_demo` di container yang sama:
 
 ```sh
-docker exec if3110-db psql -U postgres -c "CREATE DATABASE toko_demo"
-docker exec if3110-db psql -U postgres -d toko_demo -c "CREATE TABLE customers (id serial PRIMARY KEY, email varchar(120) NOT NULL UNIQUE, name text); INSERT INTO customers (email, name) VALUES ('ana@mail.com', 'Ana'), ('budi@mail.com', 'Budi');"
+docker exec if3110-db psql -U postgres -c "CREATE ROLE toko_app LOGIN PASSWORD 'toko_app'"
+docker exec if3110-db psql -U postgres -c "CREATE DATABASE toko_demo OWNER toko_app"
+docker exec if3110-db psql -U toko_app -d toko_demo -c "CREATE TABLE customers (id serial PRIMARY KEY, email varchar(120) NOT NULL UNIQUE, name text); INSERT INTO customers (email, name) VALUES ('ana@mail.com', 'Ana'), ('budi@mail.com', 'Budi');"
 ```
 
 Lalu di aplikasi (sebagai admin):
 
-1. **Connections** → tambah koneksi: host **`db`** (nama service Docker, bukan `localhost`), port `5432`, database `toko_demo`, user `postgres`, password `postgres`, SSL `disable`.
+1. **Connections** → tambah koneksi: host **`db`** (nama service Docker, bukan `localhost`), port `5432`, database `toko_demo`, user `toko_app`, password `toko_app`, SSL `disable`. Jangan pakai user `postgres`/superuser untuk koneksi target.
 2. **Users** → buat user, misalnya `budi` dan `siti`.
 3. **Groups** → buat group, masukkan anggota, beri akses ke `toko_demo` (`edit` untuk `budi`, `view` untuk `siti`), lalu edit group untuk memilih **Team Leader** dari anggotanya. Setiap group yang punya akses wajib punya leader.
 4. Login sebagai `budi` untuk melihat schema/data, membuat migration, dan mengajukan review. Login sebagai leader di halaman **Review** untuk menyetujui; setelah semua leader setuju, migration masuk queue dan dijalankan worker. Login sebagai `siti` untuk melihat bahwa View Only hanya bisa melihat.
@@ -111,6 +115,14 @@ npm run dev
 
 Buka http://localhost:5173. Permintaan `/api` diteruskan ke `localhost:9000` oleh Vite.
 
+### Test frontend
+
+```sh
+cd frontend
+npm test          # unit test (node:test)
+npm run test:e2e  # Playwright; aplikasi harus berjalan di localhost:5173
+```
+
 > Frontend juga punya mode data palsu (mock) untuk pengembangan UI. Mode ini aktif jika `frontend/.env` berisi `VITE_USE_MOCK=true`. Untuk memakai backend asli, hapus baris itu atau isi `VITE_USE_MOCK=false`.
 
 ## Konfigurasi backend (environment variable)
@@ -121,9 +133,15 @@ Buka http://localhost:5173. Permintaan `/api` diteruskan ke `localhost:9000` ole
 | `ADMIN_USERNAME`, `ADMIN_PASSWORD` | saat pertama kali | Membuat Platform Admin pertama jika belum ada admin sama sekali |
 | `DB_ENC_KEY` | disarankan | Key AES-256 (base64, 32 byte) untuk mengenkripsi password koneksi. Tanpa ini dipakai key acak, sehingga koneksi yang tersimpan tidak bisa dibuka lagi setelah restart |
 | `SESSION_HASH_KEY`, `SESSION_BLOCK_KEY` | disarankan | Key untuk menandatangani dan mengenkripsi cookie session (block key 16/24/32 byte). Tanpa ini dipakai key acak, sehingga semua user harus login ulang setelah restart |
-| `APP_ENV=production` atau `COOKIE_SECURE=true` | production | Mengaktifkan atribut `Secure` pada cookie (wajib untuk HTTPS) |
+| `APP_ENV=production` atau `COOKIE_SECURE=true` | production | Mengaktifkan `Secure` cookie, menolak `DEV_AUTH`, secret default, self-approval, dan target DB superuser |
+| `ALLOW_SELF_APPROVAL=true` | tidak | Override: izinkan leader menyetujui change request miliknya sendiri (default ditolak di production) |
+| `DENY_SUPERUSER_TARGET=true` | tidak | Tolak eksekusi migration bila user database target adalah superuser |
 | `PORT` | tidak | Port backend, default `9000` |
 | `WORKER_COUNT` | tidak | Jumlah worker migration, default `2` |
+| `MIGRATION_TIMEOUT_SECONDS` | tidak | Batas eksekusi satu migration di database target, default `300` detik |
+| `HTTP_READ_TIMEOUT_SECONDS`, `HTTP_WRITE_TIMEOUT_SECONDS`, `HTTP_IDLE_TIMEOUT_SECONDS` | tidak | Timeout HTTP, default `15`/`30`/`60` detik |
+| `HTTP_BODY_LIMIT_BYTES` | tidak | Batas body request, default `1048576` (1 MB) |
+| `DB_MAX_OPEN_CONNS`, `DB_MAX_IDLE_CONNS`, `DB_CONN_MAX_LIFETIME_MINUTES` | tidak | Batas pool database platform, default `20`/`10`/`30` menit |
 | `DEV_AUTH=true` | **jangan di production** | Hanya untuk development/test: identitas diambil dari header `X-Debug-User` |
 
 Nilai di `deploy/docker-compose.yml` dan `scripts/invoker.sh` hanya untuk development dan pengujian.

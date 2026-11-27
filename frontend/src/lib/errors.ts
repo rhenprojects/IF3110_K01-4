@@ -1,4 +1,4 @@
-import { ApiError } from "./api";
+import { ApiError } from "./api.ts";
 
 //[error] 502/504 = backend gagal menghubungi database target
 export const isConnectionError = (e: unknown) => e instanceof ApiError && (e.status === 502 || e.status === 504);
@@ -11,6 +11,8 @@ export function errorMessage(e: unknown): string {
         return "Sesi berakhir, silakan masuk lagi.";
       case 403:
         return "Kamu tidak punya izin untuk aksi ini.";
+      case 429:
+        return "Terlalu banyak percobaan. Coba lagi nanti.";
       case 502:
       case 504:
         return `Tidak bisa terhubung ke database target (${e.message}).`;

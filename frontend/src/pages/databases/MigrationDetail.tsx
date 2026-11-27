@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import {
-  useChangeRequests, useDispatchChangeRequest, useJob, useJobs, useMigration, useMigrationExecutions, useSubmitChangeRequest,
+  useCancelBatchMigration, useChangeRequests, useDispatchChangeRequest, useJob, useJobs, useMigration, useMigrationExecutions,
+  useResumeBatchMigration, useRevertBatchMigration, useSubmitChangeRequest,
 } from "../../features/databases/hooks";
 import { DataList, type Column } from "../../components/DataList";
 import { Badge, Button, ConfirmDialog, ErrorBox, Loading, generalError } from "../../components/ui";
@@ -113,6 +114,9 @@ export default function MigrationDetail() {
   const crs = useChangeRequests(db.id);
   const jobs = useJobs(db.id);
   const history = useMigrationExecutions(db.id, mid);
+  const cancelBatch = useCancelBatchMigration(db.id);
+  const resumeBatch = useResumeBatchMigration(db.id);
+  const revertBatch = useRevertBatchMigration(db.id);
   const [confirm, setConfirm] = useState<JobKind | null>(null);
 
   //[review] pengajuan terbaru untuk migration ini
@@ -137,8 +141,8 @@ export default function MigrationDetail() {
   //[rollback] rollback sukses tidak mengubah baris migration, jadi keadaan "dibatalkan" dibaca dari riwayat eksekusi
   const lastOk = [...(history.data ?? [])].sort((a, z) => z.id - a.id).find((x) => x.status === "success");
   const rolledBack = m.status === "success" && lastOk?.kind === "rollback";
-  const canRollback = m.status === "success" && !m.irreversible && !rolledBack;
-  const canForward = m.status === "failed" || rolledBack;
+  const canRollback = m.status === "success" && !m.irreversible && !rolledBack && m.batch_size === 0;
+  const canForward = (m.status === "failed" || rolledBack) && m.batch_size === 0;
 
   async function send(kind: JobKind) {
     try {
@@ -194,6 +198,47 @@ export default function MigrationDetail() {
       )}
       {job && <JobPanel job={job} />}
 
+      {m.batch_size > 0 && (
+        <section className="space-y-2 rounded border bg-slate-50 p-3 text-sm">
+          <div className="flex flex-wrap items-center gap-3">
+            <h3 className="font-medium">Batch per potongan row</h3>
+            <Badge tone={m.batch_status === "success" ? "green" : m.batch_status.includes("reverted") ? "red" : "amber"}>
+              {m.batch_status || "belum berjalan"}
+            </Badge>
+            <span className="text-slate-600">{m.batch_rows} row · {m.batch_chunks} chunk · cursor {m.batch_cursor}</span>
+          </div>
+          <p className="text-xs text-slate-500">Batch size {m.batch_size}. Checkpoint disimpan di database target pada transaction yang sama dengan potongan.</p>
+          {m.batch_cancel_requested && (
+            <p className="text-xs text-amber-700">Permintaan cancel diterima; worker berhenti di batas potongan lalu menjalankan SQL down terbalik.</p>
+          )}
+          <div className="flex flex-wrap gap-2">
+            {m.batch_status === "running" && (
+              <Button variant="danger" onClick={() => cancelBatch.mutate(m.id)} disabled={cancelBatch.isPending || m.batch_cancel_requested}>
+                Hentikan batch
+              </Button>
+            )}
+            {m.status === "partial" && !m.batch_cancel_requested && (
+              <Button variant="primary" onClick={() => resumeBatch.mutate(m.id)} disabled={resumeBatch.isPending}>
+                Lanjutkan dari checkpoint
+              </Button>
+            )}
+            {(m.status === "success" || m.status === "partial") && !m.batch_cancel_requested && (
+              <Button variant="danger" onClick={() => revertBatch.mutate(m.id)} disabled={revertBatch.isPending}>
+                Ajukan revert batch
+              </Button>
+            )}
+          </div>
+        </section>
+      )}
+
+      <ErrorBox message={generalError(cancelBatch.error, []) ?? generalError(resumeBatch.error, []) ?? generalError(revertBatch.error, [])} />
+
+      <dl className="grid gap-3 text-sm sm:grid-cols-3">
+        {meta.map(([k, v]) => (
+          <div key={k}><dt className="text-xs uppercase tracking-wide text-slate-500">{k}</dt><dd>{v}</dd></div>
+        ))}
+      </dl>
+
       {m.status === "failed" && (
         <div role="alert" className="rounded-2xl border border-danger/20 bg-danger-soft p-5 text-sm text-danger">
           <p className="font-medium">Gagal dijalankan. Seluruh perubahan di-rollback.</p>
@@ -230,6 +275,7 @@ export default function MigrationDetail() {
             up: "Migration diajukan ke Team Leader setiap group yang punya akses ke database ini. Setelah semuanya setuju, migration masuk queue dan dijalankan dalam satu transaction; satu penolakan membatalkan pengajuan.",
             rollback: "SQL down dijalankan dalam satu transaction setelah semua Team Leader setuju. Hanya migration aktif terakhir yang bisa di-rollback.",
             forward: "SQL up dijalankan ulang setelah semua Team Leader setuju.",
+            revert: "SQL down batch dijalankan setelah semua Team Leader setuju.",
           }[confirm]}${confirm !== "rollback" && isDestructive(m.sql) ? " Peringatan: SQL ini berisi perintah destruktif (DROP / TRUNCATE / DELETE)." : ""}`}
           onConfirm={() => send(confirm)} onClose={() => setConfirm(null)} />
       )}

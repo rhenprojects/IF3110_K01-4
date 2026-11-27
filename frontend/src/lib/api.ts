@@ -1,10 +1,12 @@
 export class ApiError extends Error {
   status: number; //[error] 0 = request tidak sampai ke server
   field?: string; //[error] nama field yang gagal validasi (400)
-  constructor(status: number, message: string, field?: string) {
+  retryAfter?: number; //[rate-limit] detik sampai boleh mencoba lagi (429)
+  constructor(status: number, message: string, field?: string, retryAfter?: number) {
     super(message);
     this.status = status;
     this.field = field;
+    this.retryAfter = retryAfter;
   }
 }
 
@@ -48,7 +50,8 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
       //[error] body bukan JSON, pakai statusText
     }
     if (res.status === 401 && !AUTH_PATHS.has(path)) onUnauthorized?.();
-    throw new ApiError(res.status, msg, field);
+    const retryAfter = res.status === 429 ? Number(res.headers.get("Retry-After")) || undefined : undefined;
+    throw new ApiError(res.status, msg, field, retryAfter);
   }
   return res.status === 204 ? (undefined as T) : ((await res.json()) as T);
 }

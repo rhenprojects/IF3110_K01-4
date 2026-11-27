@@ -15,7 +15,7 @@ type ChangeRequest struct {
 	ID           string              `json:"id" gorm:"type:uuid;primaryKey;default:gen_random_uuid()"`
 	ConnectionID string              `json:"connection_id" gorm:"column:connection_id;type:uuid;not null;index"`
 	MigrationID  string              `json:"migration_id" gorm:"column:migration_id;type:uuid;not null;index;index:idx_change_requests_pending,unique,where:status = 'pending_review'"`
-	Kind         JobKind             `json:"kind" gorm:"column:kind;type:varchar(10);not null;check:chk_change_requests_kind,kind IN ('up','rollback','forward')"`
+	Kind         JobKind             `json:"kind" gorm:"column:kind;type:varchar(10);not null;check:chk_change_requests_kind,kind IN ('up','rollback','forward','revert')"`
 	RollbackOf   *string             `json:"rollback_of" gorm:"column:rollback_of;type:uuid;check:chk_change_requests_rollback_of,(kind = 'rollback') = (rollback_of IS NOT NULL)"`
 	Status       ChangeRequestStatus `json:"status" gorm:"column:status;type:varchar(20);not null;default:'pending_review';check:chk_change_requests_status,status IN ('pending_review','approved','rejected')"`
 	RequestedBy  string              `json:"requested_by" gorm:"column:requested_by;type:varchar(64);not null"`

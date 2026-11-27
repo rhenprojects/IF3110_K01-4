@@ -54,7 +54,9 @@ function seedMigrations(): Record<string, Migration[]> {
   const m = (id: string, conn: string, o: Partial<Migration> & Pick<Migration, "name" | "sql" | "status">): Migration => ({
     id, connection_id: conn, version: null, error: "", created_by: "u2", created_by_name: "Budi", executed_by: null,
     executed_by_name: null, created_at: T, updated_at: T, executed_at: null, duration_ms: null,
-    sql_down: "", irreversible: false, irreversible_reason: "", revision: 1, ...o,
+    sql_down: "", irreversible: false, irreversible_reason: "", revision: 1,
+    batch_size: 0, batch_run_id: null, batch_status: "", batch_cursor: 0, batch_rows: 0, batch_chunks: 0, batch_cancel_requested: false,
+    ...o,
   });
   const ran = { executed_by: "u2", executed_by_name: "Budi" };
   return {

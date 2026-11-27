@@ -8,6 +8,11 @@ const P = "/api/v1/databases";
 const now = () => new Date().toISOString();
 
 //[akses] level efektif = tertinggi dari semua group user (contract 3.4); admin TIDAK punya jalan pintas (contract 3.5)
+function canBatchFor(s: Store, userId: string, connId: string): boolean {
+  const groups = s.groups.filter((g) => s.access[g.id]?.some((e) => e.connection_id === connId));
+  return groups.length > 0 && groups.every((g) => g.leader_id === userId);
+}
+
 function levelFor(s: Store, userId: string, connId: string): AccessLevel | null {
   let best: AccessLevel | null = null;
   for (const g of s.groups) {
@@ -56,6 +61,7 @@ function checkInput(b: Partial<MigrationInput>): Response | null {
 const definition = (b: Partial<MigrationInput>) => ({
   name: b.name!.trim(), sql: b.sql!, sql_down: b.sql_down ?? "",
   irreversible: !!b.irreversible, irreversible_reason: (b.irreversible_reason ?? "").trim(),
+  batch_size: b.batch_size ?? 0,
 });
 
 //[queue] sama dengan engine.ValidateDefinition: up wajib, lalu down atau alasan irreversible
@@ -85,6 +91,17 @@ function advanceJob(s: Store, conn: Connection, j: MigrationJob) {
     if (final && j.kind === "up") Object.assign(m, { status: "failed", error: j.error, updated_at: now() });
     return;
   }
+  if (m.batch_size > 0 && j.kind === "up" && (m.batch_chunks ?? 0) < 2) {
+    Object.assign(m, {
+      batch_status: "running",
+      batch_rows: (m.batch_rows ?? 0) + m.batch_size,
+      batch_chunks: (m.batch_chunks ?? 0) + 1,
+      batch_cursor: (m.batch_cursor ?? 0) + m.batch_size,
+      updated_at: now(),
+    });
+    j.updated_at = now();
+    return;
+  }
   const t0 = performance.now();
   let error = "";
   const rollback = j.kind === "rollback";
@@ -94,6 +111,7 @@ function advanceJob(s: Store, conn: Connection, j: MigrationJob) {
       m.status = "success";
       m.version = m.version ?? Math.max(0, ...list.map((x) => x.version ?? 0)) + 1;
       m.error = "";
+      if (m.batch_size > 0) Object.assign(m, { batch_status: "success", batch_rows: 5000, batch_chunks: 2 });
     }
   } catch (e) {
     error = (e as Error).message;
@@ -255,13 +273,13 @@ export const databaseHandlers = [
     const s = load();
     const databases = s.connections.flatMap((c) => {
       const level = levelFor(s, user.id, c.id);
-      return level ? [{ id: c.id, name: c.name, db_name: c.db_name, level }] : [];
+      return level ? [{ id: c.id, name: c.name, db_name: c.db_name, level, can_batch: canBatchFor(s, user.id, c.id) }] : [];
     });
     return HttpResponse.json({ databases });
   }),
 
-  http.get(`${P}/:id`, db("view", ({ conn, level }) =>
-    HttpResponse.json({ id: conn.id, name: conn.name, db_name: conn.db_name, level }))),
+  http.get(`${P}/:id`, db("view", ({ s, conn, user, level }) =>
+    HttpResponse.json({ id: conn.id, name: conn.name, db_name: conn.db_name, level, can_batch: canBatchFor(s, user.id, conn.id) }))),
 
   http.get(`${P}/:id/schema`, db("view", ({ s, conn }) => {
     const down = unreachable(conn);
@@ -296,6 +314,7 @@ export const databaseHandlers = [
     if (bad) return bad;
     const m: Migration = {
       id: crypto.randomUUID(), connection_id: conn.id, version: null, ...definition(b), revision: 1, status: "draft", error: "",
+      batch_run_id: null, batch_status: "", batch_cursor: 0, batch_rows: 0, batch_chunks: 0, batch_cancel_requested: false,
       created_by: user.id, created_by_name: user.name, executed_by: null, executed_by_name: null,
       created_at: now(), updated_at: now(), executed_at: null, duration_ms: null,
     };
@@ -414,6 +433,7 @@ export const databaseHandlers = [
     if (ids.length === 0) return err(400, "required", "migration_ids");
     if (ids.length > 200) return err(400, "max 200 migrations per batch", "migration_ids");
     const list = s.migrations[conn.id] ?? [];
+    if (!canBatchFor(s, user.id, conn.id)) return err(403, "only a group leader can run a batch; every group with access must have you as its leader");
     const found = ids.flatMap((id) => list.filter((m) => m.id === id));
     if (found.length !== ids.length || found.some((m) => m.status !== "draft")) return err(409, "only draft migrations can be executed");
     if (found.some((m) => /pg_sleep/i.test(m.sql))) return err(409, "another migration is already running on this database");

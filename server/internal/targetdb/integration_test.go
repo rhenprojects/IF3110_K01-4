@@ -186,6 +186,15 @@ func TestIntegrationConnectionLifecycle(t *testing.T) {
 		t.Fatalf("test after update: status %d, body %s", status, raw)
 	}
 
+	// Tes dengan body memakai isi form; password kosong memakai password tersimpan.
+	override := e.validInput("main-renamed")
+	delete(override, "password")
+	override["db_name"] = "tidak_ada_db"
+	status, body, raw = e.do(t, admin, "POST", "/admin/connections/"+id+"/test", override)
+	if status != fiber.StatusBadGateway || body["error"] != targetdb.ErrDatabaseNotFound.Error() {
+		t.Fatalf("test form override: status %d, body %s; want 502 %q", status, raw, targetdb.ErrDatabaseNotFound)
+	}
+
 	pool, err := e.svc.Pool(context.Background(), id)
 	if err != nil {
 		t.Fatalf("Pool: %v", err)
@@ -341,8 +350,8 @@ func TestIntegrationUserConnectionAccess(t *testing.T) {
 		t.Errorf("get accessible: status %d, body %s", status, raw)
 	}
 
-	if status, _, _ = e.doAs(t, user.ID, "PUT", "/connections/"+connectionID, e.validInput("should-fail-"+suffix)); status != fiber.StatusNotFound {
-		t.Errorf("update with view level: status %d, want 404", status)
+	if status, _, _ = e.doAs(t, user.ID, "PUT", "/connections/"+connectionID, e.validInput("should-fail-"+suffix)); status != fiber.StatusNotFound && status != fiber.StatusMethodNotAllowed {
+		t.Errorf("update with view level: status %d, want 404/405", status)
 	}
 
 	if err := e.db.Model(&models.GroupDatabaseAccess{}).
@@ -351,8 +360,8 @@ func TestIntegrationUserConnectionAccess(t *testing.T) {
 		t.Fatalf("grant edit: %v", err)
 	}
 
-	if status, body, raw = e.doAs(t, user.ID, "PUT", "/connections/"+connectionID, e.validInput("renamed-"+suffix)); status != fiber.StatusOK || body["name"] != "renamed-"+suffix {
-		t.Errorf("update with edit level: status %d, body %s", status, raw)
+	if status, _, raw = e.doAs(t, user.ID, "PUT", "/connections/"+connectionID, e.validInput("renamed-"+suffix)); status != fiber.StatusNotFound && status != fiber.StatusMethodNotAllowed {
+		t.Errorf("update with edit level: status %d, want 404/405; body %s", status, raw)
 	}
 	if status, _, raw = e.doAs(t, user.ID, "POST", "/connections/"+connectionID+"/test", nil); status != fiber.StatusOK {
 		t.Errorf("test accessible connection: status %d, body %s", status, raw)

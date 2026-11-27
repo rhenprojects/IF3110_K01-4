@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 	"web_backend/internal/models"
@@ -39,6 +40,12 @@ type attemptResult struct {
 	transient bool
 	uncertain bool // commit gagal dan bukti eksekusi tidak bisa diperiksa
 	recovered bool // hasil dipastikan lewat ledger, bukan dari eksekusi attempt ini
+
+	batchStatus string
+	batchCursor int64
+	batchRows   int64
+	batchChunks int64
+	keepPartial bool
 }
 
 func (r attemptResult) durationMs() int64 {
@@ -94,6 +101,10 @@ func (e *Engine) execute(ctx context.Context, spec attemptSpec) (_ *models.Migra
 		res.status = models.ExecutionFailed
 		res.errMsg = err.Error()
 		res.sqlState, res.transient = classify(err)
+		// Batas waktu eksekusi SQL adalah keputusan final, bukan gangguan sementara.
+		if errors.Is(err, context.DeadlineExceeded) {
+			res.transient = false
+		}
 		span.SetAttributes(attribute.String("execution.phase", phase), attribute.String("db.response.status_code", res.sqlState),
 			attribute.Bool("error.transient", res.transient))
 		logger.WarnContext(ctx, "migration attempt failed", "event", "sql.failed", "phase", phase,
@@ -105,6 +116,26 @@ func (e *Engine) execute(ctx context.Context, spec attemptSpec) (_ *models.Migra
 	pool, err := e.pools.Pool(ctx, spec.connectionID)
 	if err != nil {
 		return fail(err, "connect")
+	}
+	if e.opts.DenySuperuserTarget {
+		var superuser bool
+		if err := pool.QueryRow(ctx, `SELECT rolsuper FROM pg_roles WHERE rolname = current_user`).Scan(&superuser); err != nil {
+			return fail(err, "policy")
+		}
+		if superuser {
+			return fail(errors.New("target database user is superuser; use a restricted role"), "policy")
+		}
+	}
+	if m.BatchSize > 0 && spec.kind == models.JobKindRevert {
+		if m.BatchRunID == nil {
+			return fail(errors.New("batch has no checkpoint"), "revert")
+		}
+		res = e.revertBatch(ctx, spec, &m, pool, *m.BatchRunID, true)
+		return &m, res, nil
+	}
+	if m.BatchSize > 0 {
+		res = e.executeChunked(ctx, spec, &m, pool)
+		return &m, res, nil
 	}
 	if err := ensureLedger(ctx, pool); err != nil {
 		return fail(err, "ledger")
@@ -124,7 +155,19 @@ func (e *Engine) execute(ctx context.Context, spec attemptSpec) (_ *models.Migra
 	if err != nil {
 		return fail(err, "begin")
 	}
-	queryCtx, querySpan := tracer.Start(ctx, "db.query", trace.WithSpanKind(trace.SpanKindClient),
+	if e.opts.StatementTimeout > 0 {
+		if _, err := tx.Exec(ctx, fmt.Sprintf("SET LOCAL statement_timeout = %d", e.opts.StatementTimeout.Milliseconds())); err != nil {
+			_ = tx.Rollback(context.Background())
+			return fail(err, "timeout")
+		}
+	}
+	queryCtx := ctx
+	if e.opts.StatementTimeout > 0 {
+		var cancel context.CancelFunc
+		queryCtx, cancel = context.WithTimeout(ctx, e.opts.StatementTimeout)
+		defer cancel()
+	}
+	queryCtx, querySpan := tracer.Start(queryCtx, "db.query", trace.WithSpanKind(trace.SpanKindClient),
 		trace.WithAttributes(attribute.String("db.system.name", "postgresql"), attribute.String("db.query.text", queryText(res.sql))))
 	_, err = tx.Exec(queryCtx, res.sql)
 	endSpan(querySpan, err)
@@ -166,6 +209,60 @@ func (e *Engine) execute(ctx context.Context, spec attemptSpec) (_ *models.Migra
 // applyToMigration memperbarui baris migration sesuai hasil akhir eksekusi up atau forward, lalu mengembalikan versi migration untuk dicatat di riwayat.
 // Forward yang gagal dan rollback tidak mengubah baris migration.
 func (e *Engine) applyToMigration(tx *gorm.DB, m *models.Migration, kind models.JobKind, actor string, res attemptResult, final bool) (*int, error) {
+	if m != nil && m.BatchSize > 0 && res.batchStatus != "" {
+		if res.keepPartial {
+			version := m.Version
+			if res.batchStatus == "reverted" {
+				// Versi hanya untuk perubahan yang masih committed. Setelah revert
+				// penuh, bebaskan nomor versi agar tidak bentrok dengan migration baru.
+				version = nil
+			}
+			if err := tx.Model(&models.Migration{}).Where("id = ?", m.ID).Updates(map[string]any{
+				"status": models.MigrationPartial, "version": version, "error": res.errMsg,
+				"batch_status": res.batchStatus, "batch_cursor": res.batchCursor,
+				"batch_rows": res.batchRows, "batch_chunks": res.batchChunks,
+				"batch_cancel_requested": false, "executed_by": actor, "executed_at": res.finished,
+				"duration_ms": res.durationMs(), "updated_at": e.now(),
+			}).Error; err != nil {
+				return nil, err
+			}
+			return m.Version, nil
+		}
+		updates := map[string]any{
+			"batch_status": res.batchStatus, "batch_cursor": res.batchCursor,
+			"batch_rows": res.batchRows, "batch_chunks": res.batchChunks,
+			"batch_cancel_requested": false, "executed_by": actor, "executed_at": res.finished,
+			"duration_ms": res.durationMs(), "updated_at": e.now(),
+		}
+		var version *int
+		if res.status == models.ExecutionSuccess {
+			v := m.Version
+			if v == nil {
+				var max sql.NullInt64
+				if err := tx.Raw(`SELECT MAX(version) FROM migrations WHERE connection_id = ? AND status = ?`,
+					m.ConnectionID, models.MigrationSuccess).Scan(&max).Error; err != nil {
+					return nil, err
+				}
+				next := 1
+				if max.Valid {
+					next = int(max.Int64) + 1
+				}
+				v = &next
+			}
+			version = v
+			updates["status"] = models.MigrationSuccess
+			updates["version"] = *v
+			updates["error"] = ""
+		} else {
+			updates["status"] = models.MigrationPartial
+			updates["version"] = nil
+			updates["error"] = res.errMsg
+		}
+		if err := tx.Model(&models.Migration{}).Where("id = ?", m.ID).Updates(updates).Error; err != nil {
+			return nil, err
+		}
+		return version, nil
+	}
 	skip := kind == models.JobKindRollback ||
 		(kind == models.JobKindForward && res.status != models.ExecutionSuccess) ||
 		(!final && res.status != models.ExecutionSuccess)

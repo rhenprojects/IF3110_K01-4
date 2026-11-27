@@ -1,6 +1,7 @@
 package userhandler
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -198,9 +199,14 @@ func (s *SessionService) Validate(c *fiber.Ctx) (*models.Session, error) {
 		session.TokenHash = hashToken(newToken)
 		session.RotatedAt = now
 	}
-	session.LastSeenAt = now
-	if err := s.DB.Save(&session).Error; err != nil {
-		return nil, err
+	// Tulis LastSeenAt maksimal sekali per menit agar tidak ada UPDATE session
+	// pada setiap request; rotasi token tetap selalu disimpan.
+	dirty := rotate || now.Sub(session.LastSeenAt) >= time.Minute
+	if dirty {
+		session.LastSeenAt = now
+		if err := s.DB.Save(&session).Error; err != nil {
+			return nil, err
+		}
 	}
 	if rotate {
 		if err := s.cookie.set(c, newToken, session.AbsoluteExpiresAt, s.SecureCookies); err != nil {
@@ -210,6 +216,17 @@ func (s *SessionService) Validate(c *fiber.Ctx) (*models.Session, error) {
 	}
 
 	return &session, nil
+}
+
+// DeleteExpired menghapus session yang sudah melewati absolute/idle timeout.
+func (s *SessionService) DeleteExpired(ctx context.Context) error {
+	if s == nil || s.DB == nil {
+		return nil
+	}
+	now := s.now()
+	return s.DB.WithContext(ctx).
+		Where("absolute_expires_at < ? OR last_seen_at < ?", now, now.Add(-s.idleTimeout())).
+		Delete(&models.Session{}).Error
 }
 
 func (s *SessionService) revokeSession(session *models.Session, now time.Time) {

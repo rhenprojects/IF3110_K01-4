@@ -24,7 +24,11 @@ export default function Login() {
       await login(username, password);
       nav(from, { replace: true });
     } catch (err) {
-      setError(err instanceof ApiError && err.status === 401 ? "Username atau password salah" : errorMessage(err));
+      if (err instanceof ApiError && err.status === 429) {
+        setError(`Terlalu banyak percobaan. Coba lagi dalam ${err.retryAfter ?? 60} detik.`);
+      } else {
+        setError(err instanceof ApiError && err.status === 401 ? "Username atau password salah" : errorMessage(err));
+      }
     } finally {
       setBusy(false);
     }

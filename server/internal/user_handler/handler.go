@@ -3,6 +3,11 @@ package userhandler
 import (
 	"errors"
 	"log"
+	"net"
+	"strconv"
+	"strings"
+	"time"
+	"web_backend/internal/audit"
 	"web_backend/internal/authctx"
 	"web_backend/internal/httpx"
 	"web_backend/internal/models"
@@ -12,12 +17,18 @@ import (
 )
 
 type UserHandler struct {
-	DB       *gorm.DB
-	Sessions *SessionService
+	DB           *gorm.DB
+	Sessions     *SessionService
+	loginLimiter *loginLimiter
+	ipLimiter    *loginLimiter
 }
 
 func NewUserHandler(db *gorm.DB, sessions *SessionService) *UserHandler {
-	return &UserHandler{DB: db, Sessions: sessions}
+	return &UserHandler{
+		DB: db, Sessions: sessions,
+		loginLimiter: newLoginLimiter(defaultLoginMaxFailures, defaultLoginWindow),
+		ipLimiter:    newLoginLimiter(defaultLoginIPMaxFailures, defaultLoginWindow),
+	}
 }
 
 func (h *UserHandler) requireDB(c *fiber.Ctx) error {
@@ -42,20 +53,51 @@ func (h *UserHandler) CreateUser(c *fiber.Ctx) error {
 	return c.Status(fiber.StatusCreated).JSON(user)
 }
 
+func clientIP(c *fiber.Ctx) string {
+	if ip := strings.TrimSpace(c.Get("X-Real-IP")); ip != "" {
+		return ip
+	}
+	if addr := c.Context().RemoteAddr(); addr != nil {
+		if host, _, err := net.SplitHostPort(addr.String()); err == nil {
+			return host
+		}
+		return addr.String()
+	}
+	return c.IP()
+}
+
 func (h *UserHandler) Login(c *fiber.Ctx) error {
 	var req models.LoginRequest
 	if err := c.BodyParser(&req); err != nil {
 		return httpx.Error(c, fiber.StatusBadRequest, "Invalid request body")
 	}
+	username := strings.TrimSpace(req.Username)
+	limitKey := strings.ToLower(username) + "|" + clientIP(c)
+	ipKey := clientIP(c)
+	if allowed, retry := h.ipLimiter.allow(ipKey); !allowed {
+		c.Set(fiber.HeaderRetryAfter, strconv.Itoa(int(retry.Seconds())+1))
+		return httpx.Error(c, fiber.StatusTooManyRequests, "too many failed login attempts, try again later")
+	}
 
 	var user models.User
-	if err := h.DB.Where("username = ?", req.Username).First(&user).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+	if err := h.DB.Where("username = ?", username).First(&user).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		log.Printf("[user] login lookup failed: %v", err)
 		return httpx.Error(c, fiber.StatusInternalServerError, "Internal server error")
 	}
 	if !CheckPassword(user.Password, req.Password) {
+		failures := h.loginLimiter.fail(limitKey)
+		h.ipLimiter.fail(ipKey)
+		delay := time.Duration(failures) * 250 * time.Millisecond
+		if delay > 2*time.Second {
+			delay = 2 * time.Second
+		}
+		time.Sleep(delay)
+		audit.Log(h.DB, "", "login_failed", "user", username, clientIP(c), "invalid credentials")
 		return httpx.Error(c, fiber.StatusUnauthorized, "Invalid username or password")
 	}
+	h.loginLimiter.reset(limitKey)
+	h.ipLimiter.reset(ipKey)
+	audit.Log(h.DB, user.ID, "login", "user", user.ID, clientIP(c), "")
 
 	if _, _, err := h.Sessions.Create(c, user.ID); err != nil {
 		log.Printf("[user] create session failed: %v", err)
