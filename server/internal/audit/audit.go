@@ -39,9 +39,17 @@ func Middleware(db *gorm.DB) fiber.Handler {
 		if strings.HasSuffix(path, "/users/login") {
 			return err
 		}
+		action := method + " " + path
+		if len(action) > 100 {
+			action = action[:97] + "..."
+		}
+		targetID := path
+		if len(targetID) > 200 {
+			targetID = targetID[:197] + "..."
+		}
 		entry := models.AuditLog{
-			ActorID: authctx.UserID(c), Action: method + " " + path,
-			TargetType: "http", TargetID: path, IP: clientIP(c),
+			ActorID: authctx.UserID(c), Action: action,
+			TargetType: "http", TargetID: targetID, IP: clientIP(c),
 			Detail: "status=" + strconv.Itoa(c.Response().StatusCode()),
 		}
 		if e := db.WithContext(c.UserContext()).Create(&entry).Error; e != nil {
@@ -55,6 +63,12 @@ func Middleware(db *gorm.DB) fiber.Handler {
 func Log(db *gorm.DB, actorID, action, targetType, targetID, ip, detail string) {
 	if db == nil {
 		return
+	}
+	if len(action) > 100 {
+		action = action[:97] + "..."
+	}
+	if len(targetID) > 200 {
+		targetID = targetID[:197] + "..."
 	}
 	entry := models.AuditLog{ActorID: actorID, Action: action, TargetType: targetType,
 		TargetID: targetID, IP: ip, Detail: detail}

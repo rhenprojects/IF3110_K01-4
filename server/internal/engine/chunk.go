@@ -170,7 +170,20 @@ func (e *Engine) executeChunked(ctx context.Context, spec attemptSpec, m *models
 	for {
 		chunkStarted := e.now()
 		if e.batchCancelled(ctx, m.ID) {
-			return e.revertBatch(ctx, spec, m, pool, runID)
+			// Hentikan di batas potongan. Revert adalah aksi terpisah yang harus
+			// disetujui leader, jadi jangan jalankan SQL down di sini.
+			res.finished = e.now()
+			res.status = models.ExecutionFailed
+			res.errMsg = "batch stopped at checkpoint; request revert approval"
+			res.batchStatus = "partial"
+			res.batchCursor, res.batchRows, res.batchChunks = cursor, rows, chunks
+			res.keepPartial = true
+			_ = markRun(ctx, pool, runID, "partial")
+			_ = e.db.WithContext(ctx).Model(&models.Migration{}).Where("id = ?", m.ID).
+				Updates(map[string]any{"status": models.MigrationPartial, "batch_status": "partial",
+					"batch_cursor": cursor, "batch_rows": rows, "batch_chunks": chunks, "batch_cancel_requested": false}).Error
+			observability.ObserveBatch("partial", res.finished.Sub(res.started))
+			return res
 		}
 		tx, err := pool.Begin(ctx)
 		if err != nil {
@@ -244,7 +257,17 @@ func (e *Engine) executeChunked(ctx context.Context, spec attemptSpec, m *models
 			return fail(err, "checkpoint")
 		}
 		if err := tx.Commit(ctx); err != nil {
-			return fail(err, "commit")
+			// Commit bisa saja sudah berhasil walau respons error. Buktinya adalah
+			// baris chunk yang ditulis di transaction yang sama.
+			var committed bool
+			verifyErr := pool.QueryRow(ctx,
+				`SELECT EXISTS (SELECT 1 FROM _dbmp.batch_chunks WHERE run_id = $1 AND chunk_no = $2)`,
+				runID, chunks+1).Scan(&committed)
+			if verifyErr != nil || !committed {
+				return fail(err, "commit")
+			}
+			e.log.WarnContext(ctx, "batch commit uncertain but verified", "event", "batch.commit_verified",
+				"migration_id", m.ID, "run_id", runID, "chunk_no", chunks+1)
 		}
 		cursor, rows, chunks = maxID, rows+n, chunks+1
 		observability.ObserveItem("success", e.now().Sub(chunkStarted).Milliseconds())
@@ -263,13 +286,14 @@ func (e *Engine) executeChunked(ctx context.Context, spec attemptSpec, m *models
 	}
 }
 
-func (e *Engine) revertBatch(ctx context.Context, spec attemptSpec, m *models.Migration, pool *pgxpool.Pool, runID string) attemptResult {
-	res := attemptResult{sql: m.SQL, started: e.now()}
+func (e *Engine) revertBatch(ctx context.Context, spec attemptSpec, m *models.Migration, pool *pgxpool.Pool, runID string, successOnComplete bool) attemptResult {
+	res := attemptResult{sql: m.SQL, started: e.now(), keepPartial: true}
 	fail := func(err error, phase string) attemptResult {
 		res.finished = e.now()
 		res.status = models.ExecutionFailed
 		res.errMsg = err.Error()
 		res.batchStatus = "partially_reverted"
+		res.keepPartial = true
 		_ = markRun(ctx, pool, runID, "partially_reverted")
 		_ = e.db.WithContext(ctx).Model(&models.Migration{}).Where("id = ?", m.ID).
 			Updates(map[string]any{"batch_status": "partially_reverted", "status": models.MigrationPartial}).Error
@@ -337,10 +361,15 @@ func (e *Engine) revertBatch(ctx context.Context, spec attemptSpec, m *models.Mi
 		_ = markRun(ctx, pool, runID, "partially_reverted")
 		res.batchStatus = "partially_reverted"
 	}
-	res.status = models.ExecutionFailed
-	res.errMsg = "batch cancelled"
 	res.batchCursor, res.batchRows, res.batchChunks = cursor, remainingRows, remainingChunks
 	res.finished = e.now()
+	if successOnComplete && remainingChunks == 0 {
+		res.status = models.ExecutionSuccess
+		res.errMsg = ""
+	} else {
+		res.status = models.ExecutionFailed
+		res.errMsg = "batch cancelled"
+	}
 	observability.ObserveBatch("cancelled", res.finished.Sub(res.started))
 	return res
 }
@@ -371,7 +400,7 @@ func (e *Engine) RevertBatch(ctx context.Context, connectionID, migrationID, act
 		executionID: uuid.NewString(), connectionID: connectionID, migrationID: migrationID,
 		kind: models.JobKindRollback, executedBy: actor,
 	}
-	res := e.revertBatch(ctx, spec, &m, pool, *m.BatchRunID)
+	res := e.revertBatch(ctx, spec, &m, pool, *m.BatchRunID, false)
 	if res.batchStatus != "reverted" && res.batchStatus != "partially_reverted" {
 		return nil, errors.New(res.errMsg)
 	}

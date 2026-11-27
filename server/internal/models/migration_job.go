@@ -8,15 +8,16 @@ const (
 	JobKindUp       JobKind = "up"
 	JobKindRollback JobKind = "rollback"
 	JobKindForward  JobKind = "forward"
+	JobKindRevert   JobKind = "revert"
 )
 
 type JobStatus string
 
 const (
-	JobQueued  JobStatus = "queued"
-	JobRunning JobStatus = "running"
-	JobSuccess JobStatus = "success"
-	JobFailed  JobStatus = "failed"
+	JobQueued    JobStatus = "queued"
+	JobRunning   JobStatus = "running"
+	JobSuccess   JobStatus = "success"
+	JobFailed    JobStatus = "failed"
 	JobUncertain JobStatus = "uncertain"
 )
 
@@ -26,7 +27,7 @@ type MigrationJob struct {
 	ConnectionID string     `json:"connection_id" gorm:"column:connection_id;type:uuid;not null;index"`
 	MigrationID  string     `json:"migration_id" gorm:"column:migration_id;type:uuid;not null;index;index:idx_migration_jobs_active,unique,where:status <> 'success' AND status <> 'failed'"`
 	ExecutionID  string     `json:"execution_id" gorm:"column:execution_id;type:uuid;not null;uniqueIndex"`
-	Kind         JobKind    `json:"kind" gorm:"column:kind;type:varchar(10);not null;check:chk_migration_jobs_kind,kind IN ('up','rollback','forward')"`
+	Kind         JobKind    `json:"kind" gorm:"column:kind;type:varchar(10);not null;check:chk_migration_jobs_kind,kind IN ('up','rollback','forward','revert')"`
 	Status       JobStatus  `json:"status" gorm:"column:status;type:varchar(10);not null;default:'queued';index:idx_migration_jobs_status_run_after,priority:1;check:chk_migration_jobs_status,status IN ('queued','running','success','failed','uncertain')"`
 	RollbackOf   *string    `json:"rollback_of" gorm:"column:rollback_of;type:uuid"`
 	Attempts     int        `json:"attempts" gorm:"column:attempts;not null;default:0"`

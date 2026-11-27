@@ -48,7 +48,7 @@ export function JobStatusBadge({ status }: { status: JobStatus }) {
   return <Badge tone={JOB[status].tone}>{JOB[status].label}</Badge>;
 }
 
-export const KIND_LABEL: Record<JobKind, string> = { up: "Up", rollback: "Rollback", forward: "Forward" };
+export const KIND_LABEL: Record<JobKind, string> = { up: "Up", rollback: "Rollback", forward: "Forward", revert: "Revert batch" };
 
 //[error] satu tampilan untuk 403 / 404 / 502 / 504 agar semua halaman database konsisten
 export function StateError({ error, onRetry, backLink }: { error: unknown; onRetry?: () => void; backLink?: boolean }) {

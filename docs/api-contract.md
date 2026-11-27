@@ -383,7 +383,7 @@ Seluruh struktur database dalam satu response (schema bawaan sistem seperti `pg_
 
 ### `GET /databases/:id/tables/:schema/:table/rows?limit=50&offset=0`
 
-Isi tabel, per halaman:
+Isi tabel, per halaman. Untuk tabel besar (≥10.000 row) `total` dapat berupa estimasi dari statistik PostgreSQL, bukan `COUNT(*)` penuh. `limit` 1–200.
 
 ```json
 {
@@ -453,9 +453,9 @@ Izin:
 | `GET /databases/:id/migrations/:mid` | Detail satu migration |
 | `POST /databases/:id/migrations` | Buat draft. Body `{ "name": "…", "sql": "…", "sql_down": "…", "batch_size": 0 }`. Response `201` + `Migration` berstatus `draft` |
 | `PUT /databases/:id/migrations/:mid` | Ubah draft. Body sama seperti `POST`. Response `200`. `409` kalau statusnya bukan `draft` |
-| `POST /databases/:id/migrations/:mid/batch/cancel` | Minta worker berhenti di batas potongan lalu menjalankan SQL down terbalik. Response `202`; `400` kalau bukan batch |
+| `POST /databases/:id/migrations/:mid/batch/cancel` | Jika batch sedang berjalan, minta worker berhenti di batas potongan (`202`). Jika sudah `success`/`partial`, membuat change request `revert` (`201`). `400` kalau bukan batch |
 | `POST /databases/:id/migrations/:mid/batch/resume` | Lanjutkan batch dari checkpoint terakhir dan masukkan job baru ke queue. Response `202` + job; `409` kalau tidak ada checkpoint |
-| `POST /databases/:id/migrations/:mid/batch/revert` | Setelah batch sukses/partial, jalankan SQL down untuk semua chunk committed dari yang terakhir. Response `200` + Migration; `409` kalau bukan batch |
+| `POST /databases/:id/migrations/:mid/batch/revert` | Buat change request `revert` untuk batch sukses/partial. Setelah leader menyetujui, worker queue menjalankan SQL down dari chunk terakhir. Response `201` + ChangeRequest |
 
 Aturan input `POST` dan `PUT`: `name` wajib, maksimal 200 karakter. `sql` wajib, tidak boleh kosong. `sql_down` wajib kecuali `irreversible=true`. `batch_size` 0–1.000.000.
 
@@ -482,7 +482,7 @@ Di `APP_ENV=production`, leader **tidak boleh** menyetujui change request milikn
 
 | Endpoint | Fungsi |
 |---|---|
-| `POST /databases/:id/migrations/:mid/change-requests` | Ajukan perubahan. Body `{ "kind": "up" \| "rollback" \| "forward" }`. Harus `edit`. Response `201` + `ChangeRequest` berstatus `pending_review` |
+| `POST /databases/:id/migrations/:mid/change-requests` | Ajukan perubahan. Body `{ "kind": "up" \| "rollback" \| "forward" \| "revert" }`. Harus `edit`. Response `201` + `ChangeRequest` berstatus `pending_review` |
 | `GET /databases/:id/change-requests?status=&limit=50` | Daftar change request, terbaru dulu. `status` opsional (`pending_review` \| `approved` \| `rejected`), nilai lain `400`. Response `{ "change_requests": [...] }`. Minimal `view` |
 | `GET /change-requests/pending?limit=50` | Inbox leader: permintaan di database mana pun yang menunggu keputusan user ini (user memimpin group yang punya akses ke database itu dan belum memutuskan), paling lama menunggu dulu. Kosong kalau user bukan leader. Response sama dengan daftar di atas |
 | `POST /databases/:id/change-requests/:rid/approve` | Setujui. Body opsional `{ "comment": "…" }`. Hanya leader group yang punya akses ke database ini |

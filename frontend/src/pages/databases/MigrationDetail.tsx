@@ -184,9 +184,9 @@ export default function MigrationDetail() {
             <p className="text-xs text-amber-700">Permintaan cancel diterima; worker berhenti di batas potongan lalu menjalankan SQL down terbalik.</p>
           )}
           <div className="flex flex-wrap gap-2">
-            {(m.batch_status === "running" || m.batch_status === "partial") && (
+            {m.batch_status === "running" && (
               <Button variant="danger" onClick={() => cancelBatch.mutate(m.id)} disabled={cancelBatch.isPending || m.batch_cancel_requested}>
-                Batalkan & revert
+                Hentikan batch
               </Button>
             )}
             {m.status === "partial" && !m.batch_cancel_requested && (
@@ -196,7 +196,7 @@ export default function MigrationDetail() {
             )}
             {(m.status === "success" || m.status === "partial") && !m.batch_cancel_requested && (
               <Button variant="danger" onClick={() => revertBatch.mutate(m.id)} disabled={revertBatch.isPending}>
-                Revert batch
+                Ajukan revert batch
               </Button>
             )}
           </div>
@@ -247,6 +247,7 @@ export default function MigrationDetail() {
             up: "Migration diajukan ke Team Leader setiap group yang punya akses ke database ini. Setelah semuanya setuju, migration masuk queue dan dijalankan dalam satu transaction; satu penolakan membatalkan pengajuan.",
             rollback: "SQL down dijalankan dalam satu transaction setelah semua Team Leader setuju. Hanya migration aktif terakhir yang bisa di-rollback.",
             forward: "SQL up dijalankan ulang setelah semua Team Leader setuju.",
+            revert: "SQL down batch dijalankan setelah semua Team Leader setuju.",
           }[confirm]}${confirm !== "rollback" && isDestructive(m.sql) ? " Peringatan: SQL ini berisi perintah destruktif (DROP / TRUNCATE / DELETE)." : ""}`}
           onConfirm={() => send(confirm)} onClose={() => setConfirm(null)} />
       )}

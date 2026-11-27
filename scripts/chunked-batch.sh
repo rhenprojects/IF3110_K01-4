@@ -53,12 +53,17 @@ fi
 echo "== Seed $ROWS row di $TARGET_DB =="
 docker exec -i "$PG_CONTAINER" psql -U postgres -d "$TARGET_DB" -v ON_ERROR_STOP=1 -q <<SQL
 DROP TABLE IF EXISTS batch_bench;
-CREATE TABLE batch_bench (id bigint PRIMARY KEY, val int NOT NULL DEFAULT 0);
-INSERT INTO batch_bench (id) SELECT g FROM generate_series(1, $ROWS) g;
+CREATE TABLE batch_bench (id bigint PRIMARY KEY, payload text NOT NULL);
+INSERT INTO batch_bench (id, payload) SELECT g, repeat('x', 50) FROM generate_series(1, $ROWS) g;
 SQL
 
-UP='UPDATE batch_bench SET val = val + 1 WHERE id IN (SELECT id FROM batch_bench WHERE id > :last_id ORDER BY id LIMIT :batch_size)'
-DOWN='UPDATE batch_bench SET val = val - 1 WHERE id >= :from_id AND id <= :to_id'
+echo "== Baseline: satu UPDATE penuh =="
+BASE_OUT=$(docker exec -i "$PG_CONTAINER" psql -U postgres -d "$TARGET_DB" -tAc "EXPLAIN (ANALYZE, TIMING OFF, SUMMARY ON) UPDATE batch_bench SET payload = payload || 'y';")
+BASE_MS=$(printf '%s\n' "$BASE_OUT" | sed -n 's/.*Execution Time: \([0-9.]*\) ms.*/\1/p' | tail -1)
+docker exec -i "$PG_CONTAINER" psql -U postgres -d "$TARGET_DB" -q -c "UPDATE batch_bench SET payload = repeat('x', 50);"
+
+UP="UPDATE batch_bench SET payload = payload || 'y' WHERE id IN (SELECT id FROM batch_bench WHERE id > :last_id ORDER BY id LIMIT :batch_size)"
+DOWN="UPDATE batch_bench SET payload = left(payload, length(payload) - 1) WHERE id >= :from_id AND id <= :to_id"
 PAYLOAD=$(python3 -c 'import json,sys;print(json.dumps({"name":sys.argv[1],"sql":sys.argv[2],"sql_down":sys.argv[3],"batch_size":int(sys.argv[4])}))' "$NAME" "$UP" "$DOWN" "$CHUNK")
 
 echo "== Buat migration batch =="
@@ -87,6 +92,6 @@ END=$(date +%s%N)
 ELAPSED=$(python3 -c "print(f'{($END-$START)/1e9:.2f}')")
 echo
 [ "$status" = "success" ] || { echo "batch tidak sukses: $(cat "$BODY")" >&2; exit 1; }
-wrong=$(docker exec -i "$PG_CONTAINER" psql -U postgres -d "$TARGET_DB" -tAc 'SELECT count(*) FROM batch_bench WHERE val <> 1')
+wrong=$(docker exec -i "$PG_CONTAINER" psql -U postgres -d "$TARGET_DB" -tAc "SELECT count(*) FROM batch_bench WHERE payload <> repeat('x', 50) || 'y'")
 chk=$(docker exec -i "$PG_CONTAINER" psql -U postgres -d "$TARGET_DB" -tAc "SELECT count(*) FROM _dbmp.batch_chunks c JOIN _dbmp.batch_runs r ON r.run_id=c.run_id WHERE r.migration_id='$MID'")
-echo "Selesai: $rows row, $chunks chunk, ${ELAPSED}s, row_salah=$wrong, checkpoint_chunk=$chk"
+echo "Selesai: $rows row, $chunks chunk, ${ELAPSED}s, row_salah=$wrong, checkpoint_chunk=$chk, baseline_ms=${BASE_MS}"

@@ -148,6 +148,11 @@ func (e *Engine) Enqueue(ctx context.Context, req EnqueueRequest) (job *models.M
 		if m.Status != models.MigrationSuccess && m.Status != models.MigrationFailed {
 			return nil, ErrNotExecutable
 		}
+	case models.JobKindRevert:
+		if m.BatchSize <= 0 || m.BatchRunID == nil ||
+			(m.Status != models.MigrationSuccess && m.Status != models.MigrationPartial) {
+			return nil, ErrNotExecutable
+		}
 	default:
 		return nil, ErrInvalidKind
 	}

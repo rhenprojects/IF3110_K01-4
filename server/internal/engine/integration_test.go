@@ -788,8 +788,15 @@ func TestIntegrationChunkedMigrationCancelRevertsCommittedChunks(t *testing.T) {
 		t.Fatalf("job status = %s, want failed after cancel", done.Status)
 	}
 	got := f.reloadMigration(m.ID)
+	if got.Status != models.MigrationPartial || got.BatchStatus != "partial" || got.BatchRows == 0 {
+		t.Fatalf("migration = %+v, want partial checkpoint after stop", got)
+	}
+	if _, err := eng.RevertBatch(context.Background(), f.connID, m.ID, f.userID); err != nil {
+		t.Fatal(err)
+	}
+	got = f.reloadMigration(m.ID)
 	if got.Status != models.MigrationPartial || got.BatchStatus != "reverted" || got.BatchRows != 0 || got.BatchChunks != 0 {
-		t.Fatalf("migration = %+v, want partial/reverted with zero committed", got)
+		t.Fatalf("migration after revert = %+v", got)
 	}
 	var wrong int
 	if err := f.target.QueryRow(context.Background(), `SELECT count(*) FROM `+f.s()+`.batch_cancel_rows WHERE val <> 0`).Scan(&wrong); err != nil || wrong != 0 {

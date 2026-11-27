@@ -51,3 +51,14 @@ sh scripts/invoker.sh test-all    # unit + integration + API smoke
 
 - PASS: 27
 - FAIL: 0
+
+## Milestone 2
+
+| # | Item | Bukti | Status |
+|---|---|---|---|
+| 28 | Batch per potongan row: batch_size, cursor, transaction per chunk, checkpoint target, resume, cancel/revert | `TestIntegrationChunkedMigration*`, `scripts/chunked-batch.sh` | PASS |
+| 29 | Batch lewat approval + queue; stop dan revert memakai change request `revert` | `TestIntegrationChunkedMigration*`, API smoke test | PASS |
+| 30 | Dataset 1 juta row: baseline > 1 detik dan batch API | `docs/BATCH_TESTING.md`, `scripts/chunked-batch.sh` | PASS |
+| 31 | SPA diuji di browser (login + admin users), CSP tidak memblokir | `frontend/e2e/smoke.spec.ts`, `npm run test:e2e` | PASS |
+| 32 | HTTPS lokal + HSTS | `https://localhost`, header `Strict-Transport-Security` | PASS |
+| 33 | Audit log login dan mutasi API | `GET /admin/audit`, tabel `audit_logs` | PASS |

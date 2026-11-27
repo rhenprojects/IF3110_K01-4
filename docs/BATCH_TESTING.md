@@ -51,6 +51,16 @@ ROWS=1000000 CHUNK=10000 bash scripts/dataset-batch.sh
 
 Script ini mengukur baseline satu `UPDATE` penuh vs chunk manual di level database, lalu mencetak row, durasi, row/detik, jumlah chunk, dan row yang belum terupdate. Syarat spek: baseline > 1 detik; naikkan `ROWS` bila belum. Untuk membandingkan lewat API, gunakan `chunked-batch.sh` di atas.
 
+Hasil uji 1 juta row pada environment ini:
+
+| Jalur | Row | Durasi | Chunk |
+|---|---:|---:|---:|
+| Baseline satu UPDATE penuh (API script, tabel yang sama) | 1.000.000 | 2.826,5 ms | — |
+| Batch via API (`chunked-batch.sh`, 10.000/chunk) | 1.000.000 | 6,44 s | 100 |
+| Batch DB manual (`dataset-batch.sh`, 10.000/chunk) | 1.000.000 | 14,8 s | 100 |
+
+`row_salah=0` dan `checkpoint_chunk=100` pada uji API. Baseline > 1 detik, dataset sama (tabel `batch_bench`, payload teks).
+
 ## 4. Verifikasi checkpoint di database target
 
 ```sql
@@ -75,9 +85,9 @@ curl -b cookies.txt -H "X-CSRF-Token: $CSRF" -X POST \
   "$BASE_URL/databases/$DB_ID/migrations/$MID/batch/resume"
 ```
 
-- Cancel: chunk committed dibalik dari yang terakhir. Hasil `batch_status=reverted` (semua) atau `partially_reverted` (sebagian); migration menjadi `partial`.
-- Resume: worker membaca `_dbmp.batch_runs.cursor_id` dan melanjutkan; tidak mengulang chunk yang sudah committed.
-- Cancel setelah batch selesai penuh memakai `POST /migrations/:mid/batch/revert`; endpoint ini berjalan sinkron dan menjalankan SQL down untuk semua chunk dari yang terakhir.
+- **Stop batch yang sedang berjalan**: `POST /batch/cancel` hanya meminta worker berhenti di batas potongan. Tidak ada SQL down otomatis; migration menjadi `partial`.
+- **Revert**: `POST /batch/revert` membuat **change request kind `revert`**. Setelah semua leader menyetujui, worker queue menjalankan SQL down per chunk dari yang terakhir. Hasil `batch_status=reverted` (semua) atau `partially_reverted` (sebagian); migration tetap `partial`.
+- **Resume**: worker membaca `_dbmp.batch_runs.cursor_id` dan melanjutkan; tidak mengulang chunk yang sudah committed.
 
 ## 6. Observability
 

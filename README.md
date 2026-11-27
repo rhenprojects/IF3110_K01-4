@@ -59,7 +59,7 @@ docker compose -f deploy/docker-compose.yml up --build
 
 | Layanan | Alamat |
 |---|---|
-| Aplikasi (frontend) | http://localhost (juga http://localhost:5173) |
+| Aplikasi (frontend) | http://localhost (juga https://localhost dan http://localhost:5173) |
 | Backend API | http://localhost:9000/api/v1 |
 | PostgreSQL platform | `localhost:5432`, user `postgres`, password `postgres` |
 
@@ -114,6 +114,14 @@ npm run dev
 ```
 
 Buka http://localhost:5173. Permintaan `/api` diteruskan ke `localhost:9000` oleh Vite.
+
+### Test frontend
+
+```sh
+cd frontend
+npm test          # unit test (node:test)
+npm run test:e2e  # Playwright; aplikasi harus berjalan di localhost:5173
+```
 
 > Frontend juga punya mode data palsu (mock) untuk pengembangan UI. Mode ini aktif jika `frontend/.env` berisi `VITE_USE_MOCK=true`. Untuk memakai backend asli, hapus baris itu atau isi `VITE_USE_MOCK=false`.
 

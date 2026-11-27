@@ -45,6 +45,7 @@ type attemptResult struct {
 	batchCursor int64
 	batchRows   int64
 	batchChunks int64
+	keepPartial bool
 }
 
 func (r attemptResult) durationMs() int64 {
@@ -125,6 +126,13 @@ func (e *Engine) execute(ctx context.Context, spec attemptSpec) (_ *models.Migra
 			return fail(errors.New("target database user is superuser; use a restricted role"), "policy")
 		}
 	}
+	if m.BatchSize > 0 && spec.kind == models.JobKindRevert {
+		if m.BatchRunID == nil {
+			return fail(errors.New("batch has no checkpoint"), "revert")
+		}
+		res = e.revertBatch(ctx, spec, &m, pool, *m.BatchRunID, true)
+		return &m, res, nil
+	}
 	if m.BatchSize > 0 {
 		res = e.executeChunked(ctx, spec, &m, pool)
 		return &m, res, nil
@@ -202,6 +210,24 @@ func (e *Engine) execute(ctx context.Context, spec attemptSpec) (_ *models.Migra
 // Forward yang gagal dan rollback tidak mengubah baris migration.
 func (e *Engine) applyToMigration(tx *gorm.DB, m *models.Migration, kind models.JobKind, actor string, res attemptResult, final bool) (*int, error) {
 	if m != nil && m.BatchSize > 0 && res.batchStatus != "" {
+		if res.keepPartial {
+			version := m.Version
+			if res.batchStatus == "reverted" {
+				// Versi hanya untuk perubahan yang masih committed. Setelah revert
+				// penuh, bebaskan nomor versi agar tidak bentrok dengan migration baru.
+				version = nil
+			}
+			if err := tx.Model(&models.Migration{}).Where("id = ?", m.ID).Updates(map[string]any{
+				"status": models.MigrationPartial, "version": version, "error": res.errMsg,
+				"batch_status": res.batchStatus, "batch_cursor": res.batchCursor,
+				"batch_rows": res.batchRows, "batch_chunks": res.batchChunks,
+				"batch_cancel_requested": false, "executed_by": actor, "executed_at": res.finished,
+				"duration_ms": res.durationMs(), "updated_at": e.now(),
+			}).Error; err != nil {
+				return nil, err
+			}
+			return m.Version, nil
+		}
 		updates := map[string]any{
 			"batch_status": res.batchStatus, "batch_cursor": res.batchCursor,
 			"batch_rows": res.batchRows, "batch_chunks": res.batchChunks,

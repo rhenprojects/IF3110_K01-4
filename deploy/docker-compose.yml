@@ -32,8 +32,14 @@ services:
     ports:
       - "127.0.0.1:80:80"
       - "127.0.0.1:5173:80"
+      - "127.0.0.1:443:443"
+    volumes:
+      - tlscerts:/certs:ro
     depends_on:
-      - backend
+      backend:
+        condition: service_started
+      certs:
+        condition: service_completed_successfully
 
   certs:
     image: alpine:3.20

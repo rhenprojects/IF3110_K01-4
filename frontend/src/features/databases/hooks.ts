@@ -47,7 +47,7 @@ export const useCancelBatchMigration = (id: string) => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (mid: string) => api(`${base(id)}/migrations/${enc(mid)}/batch/cancel`, { method: "POST" }),
-    onSettled: () => qc.invalidateQueries({ queryKey: ["db", id], predicate: (q) => q.queryKey[2] === "migrations" }),
+    onSettled: () => qc.invalidateQueries({ queryKey: ["db", id], predicate: (q) => q.queryKey[2] === "migrations" || q.queryKey[2] === "change-requests" }),
   });
 };
 
@@ -55,7 +55,7 @@ export const useRevertBatchMigration = (id: string) => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (mid: string) => api(`${base(id)}/migrations/${enc(mid)}/batch/revert`, { method: "POST" }),
-    onSettled: () => qc.invalidateQueries({ queryKey: ["db", id], predicate: (q) => q.queryKey[2] === "migrations" }),
+    onSettled: () => qc.invalidateQueries({ queryKey: ["db", id], predicate: (q) => q.queryKey[2] === "migrations" || q.queryKey[2] === "change-requests" }),
   });
 };
 

@@ -34,6 +34,7 @@ var (
 	ErrDispatchFailed      = errors.New("approved but could not be queued")
 	ErrBatchRevert         = errors.New("batch migration must be cancelled/reverted via /batch/cancel")
 	ErrSelfApproval        = errors.New("cannot approve your own change request")
+	ErrNotRevertible       = errors.New("migration has no committed batch to revert")
 )
 
 type EnqueueFunc func(ctx context.Context, cr models.ChangeRequest) (jobID string, err error)
@@ -52,7 +53,7 @@ type Service struct {
 func New(db *gorm.DB, deps Deps) *Service { return &Service{db: db, deps: deps} }
 
 func (s *Service) Submit(ctx context.Context, userID, connectionID, migrationID string, kind models.JobKind) (*models.ChangeRequest, error) {
-	if kind != models.JobKindUp && kind != models.JobKindRollback && kind != models.JobKindForward {
+	if kind != models.JobKindUp && kind != models.JobKindRollback && kind != models.JobKindForward && kind != models.JobKindRevert {
 		return nil, ErrInvalidKind
 	}
 	canEdit, err := authz.CanEdit(ctx, s.db, userID, connectionID)
@@ -110,6 +111,10 @@ func (s *Service) Submit(ctx context.Context, userID, connectionID, migrationID 
 			}
 			if err := forwardCheck(tx, &m); err != nil {
 				return err
+			}
+		case models.JobKindRevert:
+			if m.BatchSize <= 0 || m.BatchRunID == nil || (m.Status != models.MigrationSuccess && m.Status != models.MigrationPartial) {
+				return ErrNotRevertible
 			}
 		default:
 			if m.BatchSize > 0 {
@@ -305,7 +310,7 @@ func findJob(tx *gorm.DB, cr *models.ChangeRequest) (string, error) {
 
 // checkStillValid memastikan rollback/forward yang sudah disetujui masih sesuai keadaan terkini.
 func checkStillValid(tx *gorm.DB, cr *models.ChangeRequest) error {
-	if cr.Kind == models.JobKindUp {
+	if cr.Kind == models.JobKindUp || cr.Kind == models.JobKindRevert {
 		return nil
 	}
 	var m models.Migration

@@ -325,11 +325,20 @@ func (h *Handler) CancelBatchMigration(c *fiber.Ctx) error {
 	if m.BatchSize <= 0 {
 		return httpx.ValidationError(c, "batch_size", "migration is not a batch migration")
 	}
-	if err := h.db.WithContext(c.UserContext()).Model(&models.Migration{}).
-		Where("id = ?", m.ID).Update("batch_cancel_requested", true).Error; err != nil {
+	// Batch yang masih berjalan dihentikan dulu di batas potongan. Revert
+	// dilakukan lewat change request + queue setelah berhenti.
+	if m.BatchStatus == "running" {
+		if err := h.db.WithContext(c.UserContext()).Model(&models.Migration{}).
+			Where("id = ?", m.ID).Update("batch_cancel_requested", true).Error; err != nil {
+			return h.writeError(c, err)
+		}
+		return c.Status(fiber.StatusAccepted).JSON(fiber.Map{"status": "stop_requested"})
+	}
+	cr, err := h.review.Submit(c.UserContext(), authctx.UserID(c), conn.ID, m.ID, models.JobKindRevert)
+	if err != nil {
 		return h.writeError(c, err)
 	}
-	return c.Status(fiber.StatusAccepted).JSON(fiber.Map{"status": "cancel_requested"})
+	return c.Status(fiber.StatusCreated).JSON(cr)
 }
 
 func (h *Handler) ResumeBatchMigration(c *fiber.Ctx) error {
@@ -363,11 +372,11 @@ func (h *Handler) RevertBatchMigration(c *fiber.Ctx) error {
 	if m.BatchSize <= 0 || m.BatchRunID == nil {
 		return httpx.ValidationError(c, "batch_size", "migration is not a batch migration")
 	}
-	updated, err := h.engine.RevertBatch(c.UserContext(), conn.ID, m.ID, authctx.UserID(c))
+	cr, err := h.review.Submit(c.UserContext(), authctx.UserID(c), conn.ID, m.ID, models.JobKindRevert)
 	if err != nil {
 		return h.writeError(c, err)
 	}
-	return c.JSON(updated)
+	return c.Status(fiber.StatusCreated).JSON(cr)
 }
 
 func (h *Handler) ListJobs(c *fiber.Ctx) error {
@@ -553,7 +562,7 @@ func (h *Handler) writeError(c *fiber.Ctx, err error) error {
 		return httpx.Error(c, fiber.StatusBadRequest, err.Error())
 	case errors.Is(err, review.ErrMigrationNotFound), errors.Is(err, review.ErrRequestNotFound):
 		return httpx.Error(c, fiber.StatusNotFound, err.Error())
-	case errors.Is(err, review.ErrSelfApproval):
+	case errors.Is(err, review.ErrSelfApproval), errors.Is(err, review.ErrNotRevertible):
 		return httpx.Error(c, fiber.StatusConflict, err.Error())
 	case errors.Is(err, review.ErrNotLeader), errors.Is(err, review.ErrEditAccessRequired):
 		return httpx.Error(c, fiber.StatusForbidden, err.Error())

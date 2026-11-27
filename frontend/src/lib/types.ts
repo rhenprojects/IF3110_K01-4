@@ -140,7 +140,7 @@ export type ChangeRequest = {
 };
 
 //[queue] satu permintaan eksekusi di queue; execute menjawab 202 dengan objek ini
-export type JobKind = "up" | "rollback" | "forward";
+export type JobKind = "up" | "rollback" | "forward" | "revert";
 export type JobStatus = "queued" | "running" | "success" | "failed" | "uncertain";
 export type MigrationJob = {
   id: string;

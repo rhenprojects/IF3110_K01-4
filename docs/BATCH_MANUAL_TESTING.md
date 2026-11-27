@@ -42,9 +42,10 @@ INSERT INTO big_table (id) SELECT g FROM generate_series(1, 50000) g;"
 
 ## Cancel dan resume
 
-- Saat batch berjalan, klik **Batalkan & revert**. Worker berhenti di batas potongan, menjalankan SQL down dari chunk terakhir, dan status menjadi `reverted`/`partially_reverted` (migration `partial`).
+- Saat batch berjalan, klik **Hentikan batch**. Worker berhenti di batas potongan; migration menjadi `partial`.
+- Untuk membatalkan committed chunk, klik **Ajukan revert batch**. Ini membuat change request `revert`; setelah leader menyetujui, worker menjalankan SQL down dari chunk terakhir. Statusnya `reverted`/`partially_reverted`.
 - Setelah berhenti, klik **Lanjutkan dari checkpoint**. Worker melanjutkan dari cursor terakhir.
-- Setelah batch sukses, klik **Revert batch** untuk menjalankan SQL down seluruh chunk dari yang terakhir dan menandai migration `partial`/`reverted`.
+- Setelah batch sukses, **Ajukan revert batch** juga memakai approval + queue.
 
 ## Dataset besar
 
