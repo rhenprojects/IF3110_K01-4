@@ -6,21 +6,27 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"web_backend/internal/authctx"
 	databasehandler "web_backend/internal/database_handler"
 	"web_backend/internal/engine"
 	"web_backend/internal/models"
+	"web_backend/internal/review"
 	"web_backend/internal/targetdb"
+	"web_backend/internal/telemetry"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -95,6 +101,7 @@ func setup(t *testing.T) *env {
 	eng, err := engine.New(db, e.conns, engine.Options{
 		PollEvery: 50 * time.Millisecond, BackoffBase: 50 * time.Millisecond,
 		HeartbeatEvery: 200 * time.Millisecond, StaleAfter: 2 * time.Second,
+		Revalidate: review.StillValid,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -428,6 +435,68 @@ func TestIntegrationRows(t *testing.T) {
 	var view models.RowsResponse
 	if status, raw := e.do(e.viewer, "GET", e.dbPath("tables", e.schema, "order_summary", "rows"), nil, &view); status != fiber.StatusOK || view.Total != 2 {
 		t.Errorf("view rows: status %d body %s", status, raw)
+	}
+}
+
+// lockedBuffer aman ditulis bersamaan oleh handler dan worker engine.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) lines() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return strings.Split(strings.TrimSpace(b.buf.String()), "\n")
+}
+
+func TestIntegrationViewerQueriesAreLogged(t *testing.T) {
+	e := setup(t)
+	logs := &lockedBuffer{}
+	previous, previousTP := slog.Default(), otel.GetTracerProvider()
+	slog.SetDefault(telemetry.NewLogger(logs))
+	otel.SetTracerProvider(sdktrace.NewTracerProvider()) // di aplikasi dipasang oleh telemetry.Setup
+	t.Cleanup(func() { slog.SetDefault(previous); otel.SetTracerProvider(previousTP) })
+
+	if status, raw := e.do(e.viewer, "GET", e.dbPath("tables", e.schema, "orders", "rows")+"?limit=2", nil, nil); status != fiber.StatusOK {
+		t.Fatalf("rows: status %d body %s", status, raw)
+	}
+	if status, raw := e.do(e.viewer, "GET", e.dbPath("schema"), nil, nil); status != fiber.StatusOK {
+		t.Fatalf("schema: status %d body %s", status, raw)
+	}
+
+	var dataQuery map[string]any
+	operations := map[string]bool{}
+	for _, line := range logs.lines() {
+		var entry map[string]any
+		if json.Unmarshal([]byte(line), &entry) != nil || entry["event"] != "sql.query" {
+			continue
+		}
+		if entry["actor"] != e.viewer || entry["database"] != e.connectionID || entry["status"] != "success" {
+			t.Errorf("query log attributes = %v", entry)
+		}
+		if entry["trace_id"] == nil || entry["span_id"] == nil || entry["duration_ms"] == nil {
+			t.Errorf("query log without trace context or duration: %v", entry)
+		}
+		operations[fmt.Sprint(entry["operation"])] = true
+		if q, _ := entry["query"].(string); strings.HasPrefix(q, "SELECT") && strings.Contains(q, "LIMIT $1 OFFSET $2") {
+			dataQuery = entry
+		}
+	}
+	if !operations["rows"] || !operations["schema"] {
+		t.Errorf("read-only queries of both viewer operations must be logged, got %v", operations)
+	}
+	if dataQuery == nil {
+		t.Fatalf("data query not logged:\n%s", strings.Join(logs.lines(), "\n"))
+	}
+	if dataQuery["rows"] != float64(2) || fmt.Sprint(dataQuery["params"]) != "[2 0]" {
+		t.Errorf("data query log = %v, want rows 2 and params [2 0]", dataQuery)
 	}
 }
 
