@@ -64,3 +64,4 @@ sh scripts/invoker.sh test-all    # unit + integration + API smoke
 | 33 | Audit log login dan mutasi API | `GET /admin/audit`, tabel `audit_logs` | PASS |
 | 34 | Setujui banyak pengajuan sekaligus; tiap request tetap dinilai sendiri (leader, self-approval, queue) | `TestIntegrationBulkApproveChangeRequests`, `POST /databases/:id/change-requests/approve` | PASS |
 | 35 | Bonus stress test k6: beban bertahap naik/turun, threshold p95 & error rate, queue wait dan durasi job | `scripts/k6-stress.sh`, hasil di README bagian "Stress test dengan k6" | PASS |
+| 36 | Metrik queue & pool: job per status, waktu tunggu queue, durasi migration, retry, lock busy, koneksi pool | `GET /metrics` (`migration_jobs`, `migration_queue_wait_seconds`, `db_pool_connections`), dashboard Grafana 13 panel | PASS |

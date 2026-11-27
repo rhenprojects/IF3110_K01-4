@@ -62,6 +62,7 @@ func setup(t *testing.T) *env {
 		t.Fatalf("open db: %v", err)
 	}
 	if err := db.Migrator().DropTable(
+		&models.MigrationBatchItem{}, &models.MigrationBatch{},
 		&models.Approval{}, &models.ChangeRequest{}, &models.MigrationExecution{}, &models.MigrationJob{},
 		&models.Session{}, &models.Migration{}, &models.GroupDatabaseAccess{}, &models.GroupMember{},
 		&models.Group{}, &models.DBConnection{}, &models.User{},

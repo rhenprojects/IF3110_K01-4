@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 	"web_backend/internal/models"
+	"web_backend/internal/observability"
 	"web_backend/internal/telemetry"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -110,6 +111,10 @@ func (e *Engine) process(job *models.MigrationJob, workerID string) {
 	spec := specForJob(job)
 	logger := e.attemptLogger(spec).With("worker", workerID)
 	queueWait := time.Since(job.RunAfter)
+	observability.ObserveQueueWait(queueWait)
+	if job.Attempts > 1 {
+		observability.IncRetry()
+	}
 	logger.InfoContext(ctx, "job claimed", "event", "job.claimed", "status", models.JobRunning, "queue_wait_ms", queueWait.Milliseconds())
 
 	lockCtx, lockSpan := tracer.Start(ctx, "lock.acquire", trace.WithAttributes(attribute.String("db.connection_id", job.ConnectionID)))
@@ -129,6 +134,7 @@ func (e *Engine) process(job *models.MigrationJob, workerID string) {
 			reason = err.Error()
 
 		}
+		observability.IncLockBusy()
 		span.SetAttributes(attribute.String("job.outcome", "requeued_lock_busy"))
 		logger.InfoContext(ctx, "database lock not acquired, job requeued", "event", "lock.busy", "reason", reason)
 		return
@@ -158,6 +164,7 @@ func (e *Engine) process(job *models.MigrationJob, workerID string) {
 	if next == models.JobFailed || next == models.JobUncertain {
 		span.SetStatus(codes.Error, res.errMsg)
 	}
+	observability.ObserveJobDuration(res.durationMs())
 	logger.InfoContext(ctx, "job attempt finished", "event", "job.finished", "status", next,
 		"execution_status", res.status, "duration_ms", res.durationMs())
 }

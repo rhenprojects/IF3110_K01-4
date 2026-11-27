@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"strings"
+	"time"
 	"web_backend/internal/authz"
 	"web_backend/internal/models"
 
@@ -86,6 +87,14 @@ type Service struct {
 
 func NewService(db *gorm.DB, cipher *Cipher, pools *PoolManager) *Service {
 	return &Service{db: db, cipher: cipher, pools: pools}
+}
+
+// PoolStats meneruskan pemakaian pool target untuk metrik Prometheus.
+func (s *Service) PoolStats() (inUse, idle, max int, wait time.Duration) {
+	if s.pools == nil {
+		return 0, 0, 0, 0
+	}
+	return s.pools.Stats()
 }
 
 func (s *Service) List(ctx context.Context) ([]models.DBConnection, error) {

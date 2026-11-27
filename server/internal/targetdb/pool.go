@@ -23,6 +23,21 @@ func NewPoolManager() *PoolManager {
 	return &PoolManager{pools: make(map[string]*pgxpool.Pool)}
 }
 
+// Stats mengagregasi pemakaian seluruh pool target: koneksi terpakai, idle,
+// batas maksimum, dan total waktu menunggu koneksi (kumulatif per pool).
+func (m *PoolManager) Stats() (inUse, idle, max int, wait time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, pool := range m.pools {
+		s := pool.Stat()
+		inUse += int(s.AcquiredConns())
+		idle += int(s.IdleConns())
+		max += int(s.MaxConns())
+		wait += s.AcquireDuration()
+	}
+	return inUse, idle, max, wait
+}
+
 func (m *PoolManager) Get(ctx context.Context, id string, params ConnParams) (*pgxpool.Pool, error) {
 	m.mu.Lock()
 	pool, ok := m.pools[id]

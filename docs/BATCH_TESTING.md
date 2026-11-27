@@ -94,6 +94,19 @@ curl -b cookies.txt -H "X-CSRF-Token: $CSRF" -X POST \
 
 Setiap migration tetap tercatat di `migration_executions` dan `migration_jobs`. Mode chunked juga mengisi `migration_batch_total{status=success|partial|cancelled}`, `migration_batch_duration_seconds`, dan `migration_item_duration_seconds` per potongan, sehingga dashboard batch tetap terisi. `migration_batch_items_total` sekarang menghitung potongan (chunk), bukan migration.
 
+Metrik queue dan pool (diperbarui tiap 10 detik oleh backend):
+
+| Metrik | Arti |
+|---|---|
+| `migration_jobs{status="queued\|running\|success\|partial\|failed\|uncertain\|cancelled"}` | Jumlah job saat ini per status |
+| `migration_queue_wait_seconds` | Histogram waktu tunggu job di queue sebelum diambil worker |
+| `migration_duration_seconds` | Histogram durasi satu attempt migration |
+| `migration_retries_total` | Attempt yang merupakan retry (attempt > 1) |
+| `migration_lock_busy_total` | Job dikembalikan ke queue karena lock database dipakai |
+| `db_pool_connections{state="in_use\|idle"}` | Koneksi pool aplikasi (platform + target) yang terpakai/idle |
+| `db_pool_max_connections` | Batas maksimum koneksi seluruh pool |
+| `db_pool_wait_seconds_total` | Total waktu menunggu koneksi dari pool |
+
 ## 7. Batasan yang diketahui
 
 - Checkpoint disimpan di database target, bukan database platform. Ini dipilih agar checkpoint dan potongan data berada dalam satu transaction.
@@ -130,3 +143,4 @@ cd server && TEST_PG_DSN="host=localhost port=5432 user=postgres password=postgr
 | 11 | Satu database fisik satu koneksi | `POST /admin/connections` dua kali dengan host/port/db sama | `409` "this target database is already registered" | `TestIntegrationDuplicateTargetDatabase` |
 | 12 | Baseline > 1 detik | `ROWS=1000000 CHUNK=10000 bash scripts/dataset-batch.sh` | Durasi baseline > 1 detik pada dataset yang sama | §3 dokumen ini |
 | 13 | Metrik batch terisi | Scrape `/metrics` setelah satu batch | `migration_batch_total{status="success"}`, `migration_item_duration_seconds`, `migration_batch_duration_seconds` naik | manual, lihat §6 |
+| 14 | Metrik queue & pool terisi | Scrape `/metrics` | `migration_jobs{status=...}`, `migration_queue_wait_seconds`, `migration_duration_seconds`, `db_pool_connections{state=...}` muncul dengan nilai wajar | manual |

@@ -49,6 +49,11 @@ func batchTestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
+	// Paket lain memakai database test yang sama; bersihkan tabel batch dan
+	// migration supaya urutan paket tidak memengaruhi hasil.
+	if err := db.Migrator().DropTable(&models.MigrationBatchItem{}, &models.MigrationBatch{}, &models.Migration{}, &models.DBConnection{}); err != nil {
+		t.Fatalf("drop: %v", err)
+	}
 	if err := db.AutoMigrate(&models.DBConnection{}, &models.Migration{}, &models.MigrationBatch{}, &models.MigrationBatchItem{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}

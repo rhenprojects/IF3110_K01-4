@@ -115,6 +115,9 @@ func main() {
 				log.Printf("[WARN] Server metrik berhenti: %v", err)
 			}
 		}()
+		if db != nil {
+			go refreshOperationalMetrics(db, connService)
+		}
 	}
 
 	devAuth := os.Getenv("DEV_AUTH") == "true"
@@ -185,4 +188,43 @@ func envInt(name string, fallback int) int {
 		return fallback
 	}
 	return value
+}
+
+// refreshOperationalMetrics memperbarui gauge queue dan pool secara berkala.
+// Query-nya ringan (satu agregasi + statistik pool) supaya tidak membebani
+// database platform.
+func refreshOperationalMetrics(db *gorm.DB, svc *targetdb.Service) {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	var lastWait float64
+	for {
+		var rows []struct {
+			Status string
+			Total  int64
+		}
+		if err := db.Raw("SELECT status, count(*) AS total FROM migration_jobs GROUP BY status").Scan(&rows).Error; err == nil {
+			counts := make(map[string]int64, len(rows))
+			for _, row := range rows {
+				counts[row.Status] = row.Total
+			}
+			observability.SetJobCounts(counts)
+		}
+		var inUse, idle, max int
+		var wait float64
+		if sqlDB, err := db.DB(); err == nil {
+			stats := sqlDB.Stats()
+			inUse, idle, max = stats.InUse, stats.Idle, stats.MaxOpenConnections
+			wait = stats.WaitDuration.Seconds()
+		}
+		if svc != nil {
+			targetInUse, targetIdle, targetMax, targetWait := svc.PoolStats()
+			inUse += targetInUse
+			idle += targetIdle
+			max += targetMax
+			wait += targetWait.Seconds()
+		}
+		observability.SetPoolStats(inUse, idle, max, wait-lastWait)
+		lastWait = wait
+		<-ticker.C
+	}
 }
