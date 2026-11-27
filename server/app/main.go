@@ -112,9 +112,22 @@ func main() {
 		}()
 	}
 
+	env := strings.ToLower(strings.TrimSpace(os.Getenv("APP_ENV")))
+	production := env == "production" || env == "prod"
 	devAuth := os.Getenv("DEV_AUTH") == "true"
 	if devAuth {
+		if production {
+			log.Fatal("DEV_AUTH tidak boleh aktif di production")
+		}
 		log.Println("[WARN] DEV_AUTH aktif: identitas user diambil dari header X-Debug-User. Jangan dipakai di production")
+	}
+	if production {
+		if os.Getenv("ADMIN_PASSWORD") == "admin-password" || os.Getenv("ADMIN_PASSWORD") == "" {
+			log.Fatal("ADMIN_PASSWORD default/kosong tidak boleh dipakai di production")
+		}
+		if os.Getenv("DB_ENC_KEY") == "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=" {
+			log.Fatal("DB_ENC_KEY default compose tidak boleh dipakai di production")
+		}
 	}
 
 	hashKey := []byte(os.Getenv("SESSION_HASH_KEY"))
@@ -123,8 +136,18 @@ func main() {
 		log.Println("[WARN] SESSION_HASH_KEY atau SESSION_BLOCK_KEY belum diset. Cookie session memakai key acak dan tidak valid setelah server restart")
 	}
 	sessionService := userhandler.NewSessionService(db, hashKey, blockKey)
-	env := strings.ToLower(strings.TrimSpace(os.Getenv("APP_ENV")))
-	secureCookies := env == "production" || env == "prod"
+	if db != nil {
+		go func() {
+			ticker := time.NewTicker(time.Hour)
+			defer ticker.Stop()
+			for range ticker.C {
+				if err := sessionService.DeleteExpired(context.Background()); err != nil {
+					log.Printf("[WARN] Gagal membersihkan session kedaluwarsa: %v", err)
+				}
+			}
+		}()
+	}
+	secureCookies := production
 	if !secureCookies {
 		switch strings.ToLower(strings.TrimSpace(os.Getenv("COOKIE_SECURE"))) {
 		case "true", "1":

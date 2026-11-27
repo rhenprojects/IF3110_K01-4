@@ -6,9 +6,6 @@ import (
 	"database/sql/driver"
 )
 
-// lockNamespace memisahkan advisory lock milik platform dari lock lain di database yang sama
-const lockNamespace int32 = 0x4442 // "DB"
-
 // Locker memberi lock "satu migration per database target" yang berlaku lintas goroutine, worker, dan proses.
 type Locker struct {
 	db *sql.DB
@@ -23,8 +20,9 @@ func (l *Locker) TryLock(ctx context.Context, connectionID string) (release func
 		return nil, false, err
 	}
 	var got bool
+	key := "dbmp:" + connectionID
 	if err := conn.QueryRowContext(ctx,
-		`SELECT pg_try_advisory_lock($1, hashtext($2))`, lockNamespace, connectionID).Scan(&got); err != nil {
+		`SELECT pg_try_advisory_lock(hashtextextended($1, 0))`, key).Scan(&got); err != nil {
 		discard(conn)
 		return nil, false, err
 	}
@@ -35,12 +33,12 @@ func (l *Locker) TryLock(ctx context.Context, connectionID string) (release func
 	return func() {
 		var unlocked bool
 		err := conn.QueryRowContext(context.Background(),
-			`SELECT pg_advisory_unlock($1, hashtext($2))`, lockNamespace, connectionID).Scan(&unlocked)
+			`SELECT pg_advisory_unlock(hashtextextended($1, 0))`, key).Scan(&unlocked)
 		if err != nil || !unlocked {
 
 			discard(conn)
 			return
-			
+
 		}
 		_ = conn.Close()
 	}, true, nil

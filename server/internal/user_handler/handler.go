@@ -17,12 +17,14 @@ type UserHandler struct {
 	DB           *gorm.DB
 	Sessions     *SessionService
 	loginLimiter *loginLimiter
+	ipLimiter    *loginLimiter
 }
 
 func NewUserHandler(db *gorm.DB, sessions *SessionService) *UserHandler {
 	return &UserHandler{
 		DB: db, Sessions: sessions,
 		loginLimiter: newLoginLimiter(defaultLoginMaxFailures, defaultLoginWindow),
+		ipLimiter:    newLoginLimiter(defaultLoginIPMaxFailures, defaultLoginWindow),
 	}
 }
 
@@ -55,7 +57,12 @@ func (h *UserHandler) Login(c *fiber.Ctx) error {
 	}
 	username := strings.TrimSpace(req.Username)
 	limitKey := strings.ToLower(username) + "|" + c.IP()
+	ipKey := c.IP()
 	if allowed, retry := h.loginLimiter.allow(limitKey); !allowed {
+		c.Set(fiber.HeaderRetryAfter, strconv.Itoa(int(retry.Seconds())+1))
+		return httpx.Error(c, fiber.StatusTooManyRequests, "too many failed login attempts, try again later")
+	}
+	if allowed, retry := h.ipLimiter.allow(ipKey); !allowed {
 		c.Set(fiber.HeaderRetryAfter, strconv.Itoa(int(retry.Seconds())+1))
 		return httpx.Error(c, fiber.StatusTooManyRequests, "too many failed login attempts, try again later")
 	}
@@ -67,9 +74,11 @@ func (h *UserHandler) Login(c *fiber.Ctx) error {
 	}
 	if !CheckPassword(user.Password, req.Password) {
 		h.loginLimiter.fail(limitKey)
+		h.ipLimiter.fail(ipKey)
 		return httpx.Error(c, fiber.StatusUnauthorized, "Invalid username or password")
 	}
 	h.loginLimiter.reset(limitKey)
+	h.ipLimiter.reset(ipKey)
 
 	if _, _, err := h.Sessions.Create(c, user.ID); err != nil {
 		log.Printf("[user] create session failed: %v", err)

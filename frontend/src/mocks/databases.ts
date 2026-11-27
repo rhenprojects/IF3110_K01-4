@@ -8,6 +8,11 @@ const P = "/api/v1/databases";
 const now = () => new Date().toISOString();
 
 //[akses] level efektif = tertinggi dari semua group user (contract 3.4); admin TIDAK punya jalan pintas (contract 3.5)
+function canBatchFor(s: Store, userId: string, connId: string): boolean {
+  const groups = s.groups.filter((g) => s.access[g.id]?.some((e) => e.connection_id === connId));
+  return groups.length > 0 && groups.every((g) => g.leader_id === userId);
+}
+
 function levelFor(s: Store, userId: string, connId: string): AccessLevel | null {
   let best: AccessLevel | null = null;
   for (const g of s.groups) {
@@ -255,13 +260,13 @@ export const databaseHandlers = [
     const s = load();
     const databases = s.connections.flatMap((c) => {
       const level = levelFor(s, user.id, c.id);
-      return level ? [{ id: c.id, name: c.name, db_name: c.db_name, level }] : [];
+      return level ? [{ id: c.id, name: c.name, db_name: c.db_name, level, can_batch: canBatchFor(s, user.id, c.id) }] : [];
     });
     return HttpResponse.json({ databases });
   }),
 
-  http.get(`${P}/:id`, db("view", ({ conn, level }) =>
-    HttpResponse.json({ id: conn.id, name: conn.name, db_name: conn.db_name, level }))),
+  http.get(`${P}/:id`, db("view", ({ s, conn, user, level }) =>
+    HttpResponse.json({ id: conn.id, name: conn.name, db_name: conn.db_name, level, can_batch: canBatchFor(s, user.id, conn.id) }))),
 
   http.get(`${P}/:id/schema`, db("view", ({ s, conn }) => {
     const down = unreachable(conn);
@@ -414,6 +419,7 @@ export const databaseHandlers = [
     if (ids.length === 0) return err(400, "required", "migration_ids");
     if (ids.length > 200) return err(400, "max 200 migrations per batch", "migration_ids");
     const list = s.migrations[conn.id] ?? [];
+    if (!canBatchFor(s, user.id, conn.id)) return err(403, "only a group leader can run a batch; every group with access must have you as its leader");
     const found = ids.flatMap((id) => list.filter((m) => m.id === id));
     if (found.length !== ids.length || found.some((m) => m.status !== "draft")) return err(409, "only draft migrations can be executed");
     if (found.some((m) => /pg_sleep/i.test(m.sql))) return err(409, "another migration is already running on this database");

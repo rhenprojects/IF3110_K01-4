@@ -53,7 +53,7 @@ export type AccessLevel = "view" | "edit";
 export type AccessEntry = { connection_id: string; level: AccessLevel };
 
 //[databases] endpoint user biasa (docs/api-contract.md bagian 8)
-export type DatabaseItem = { id: string; name: string; db_name: string; level: AccessLevel };
+export type DatabaseItem = { id: string; name: string; db_name: string; level: AccessLevel; can_batch?: boolean };
 
 export type ColumnInfo = { name: string; type: string; nullable: boolean; default: string | null; is_primary_key: boolean };
 export type ConstraintInfo = { name: string; type: "primary_key" | "foreign_key" | "unique" | "check"; definition: string };

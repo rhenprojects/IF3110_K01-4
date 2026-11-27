@@ -332,13 +332,15 @@ Daftar database yang boleh diakses user, lengkap dengan level efektifnya:
 ```json
 {
   "databases": [
-    { "id": "…", "name": "toko", "db_name": "toko", "level": "edit" },
-    { "id": "…", "name": "hr",   "db_name": "hr",   "level": "view" }
+    { "id": "…", "name": "toko", "db_name": "toko", "level": "edit", "can_batch": true },
+    { "id": "…", "name": "hr",   "db_name": "hr",   "level": "view", "can_batch": false }
   ]
 }
 ```
 
 User yang tidak punya akses ke database mana pun mendapat `{ "databases": [] }`.
+
+`can_batch` bernilai `true` hanya jika user adalah Team Leader dari **setiap** group yang punya akses ke database itu. Field ini dipakai UI untuk menampilkan tombol eksekusi batch.
 
 ### `GET /databases/:id`
 

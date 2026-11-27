@@ -6,9 +6,10 @@ import (
 )
 
 const (
-	defaultLoginMaxFailures = 5
-	defaultLoginWindow      = 15 * time.Minute
-	loginLimiterMaxEntries  = 10000
+	defaultLoginMaxFailures   = 5
+	defaultLoginIPMaxFailures = 30
+	defaultLoginWindow        = 15 * time.Minute
+	loginLimiterMaxEntries    = 10000
 )
 
 type loginLimitEntry struct {

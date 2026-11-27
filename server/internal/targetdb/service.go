@@ -254,13 +254,17 @@ func (s *Service) ListAccessible(ctx context.Context, userID string) ([]models.D
 	if err != nil {
 		return nil, err
 	}
+	ids := make([]string, len(conns))
+	for i, conn := range conns {
+		ids[i] = conn.ID
+	}
+	access, err := authz.AccessFor(ctx, s.db, userID, ids)
+	if err != nil {
+		return nil, err
+	}
 	visible := make([]models.DBConnection, 0, len(conns))
 	for _, conn := range conns {
-		ok, err := s.CanView(ctx, userID, conn.ID)
-		if err != nil {
-			return nil, err
-		}
-		if ok {
+		if access[conn.ID].Level != models.AccessNone {
 			visible = append(visible, conn)
 		}
 	}

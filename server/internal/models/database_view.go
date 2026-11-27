@@ -1,10 +1,11 @@
 package models
 
 type DatabaseItem struct {
-	ID     string      `json:"id"`
-	Name   string      `json:"name"`
-	DBName string      `json:"db_name"`
-	Level  AccessLevel `json:"level"`
+	ID       string      `json:"id"`
+	Name     string      `json:"name"`
+	DBName   string      `json:"db_name"`
+	Level    AccessLevel `json:"level"`
+	CanBatch bool        `json:"can_batch"`
 }
 
 type DatabaseListResponse struct {

@@ -98,17 +98,22 @@ func (h *Handler) List(c *fiber.Ctx) error {
 		return h.writeError(c, err)
 	}
 	userID := authctx.UserID(c)
+	ids := make([]string, len(conns))
+	for i, conn := range conns {
+		ids[i] = conn.ID
+	}
+	access, err := authz.AccessFor(c.UserContext(), h.db, userID, ids)
+	if err != nil {
+		return h.writeError(c, err)
+	}
 	items := make([]models.DatabaseItem, 0, len(conns))
 	for _, conn := range conns {
-		level, err := authz.Level(c.UserContext(), h.db, userID, conn.ID)
-		if err != nil {
-			return h.writeError(c, err)
-		}
-		if level == models.AccessNone {
+		a := access[conn.ID]
+		if a.Level == models.AccessNone {
 			continue
 		}
 		items = append(items, models.DatabaseItem{
-			ID: conn.ID, Name: conn.Name, DBName: conn.DBName, Level: level,
+			ID: conn.ID, Name: conn.Name, DBName: conn.DBName, Level: a.Level, CanBatch: a.CanBatch,
 		})
 	}
 	return c.JSON(models.DatabaseListResponse{Databases: items})
@@ -119,8 +124,12 @@ func (h *Handler) Get(c *fiber.Ctx) error {
 	if err != nil {
 		return h.writeError(c, err)
 	}
+	access, err := authz.AccessFor(c.UserContext(), h.db, authctx.UserID(c), []string{conn.ID})
+	if err != nil {
+		return h.writeError(c, err)
+	}
 	return c.JSON(models.DatabaseItem{
-		ID: conn.ID, Name: conn.Name, DBName: conn.DBName, Level: level,
+		ID: conn.ID, Name: conn.Name, DBName: conn.DBName, Level: level, CanBatch: access[conn.ID].CanBatch,
 	})
 }
 

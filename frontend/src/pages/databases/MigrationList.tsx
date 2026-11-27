@@ -16,6 +16,7 @@ export default function MigrationList() {
   const [confirm, setConfirm] = useState(false);
 
   const editable = canEdit(db.level);
+  const canBatch = editable && db.can_batch === true;
   const drafts = q.data?.filter((m) => m.status === "draft") ?? [];
   const toggle = (id: string) =>
     setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
@@ -37,10 +38,13 @@ export default function MigrationList() {
     ? <Button variant="primary" onClick={() => nav(`/databases/${db.id}/migrations/new`)}>Migration baru</Button> : undefined;
   const actions = editable ? (
     <div className="flex flex-wrap gap-2">
-      {picked.length > 0 && (
+      {picked.length > 0 && canBatch && (
         <Button onClick={() => setConfirm(true)} disabled={batch.isPending}>
           Jalankan terpilih ({picked.length})
         </Button>
+      )}
+      {picked.length > 0 && !canBatch && (
+        <span className="self-center text-xs text-slate-500">Batch hanya untuk Team Leader semua group yang punya akses.</span>
       )}
       {add}
     </div>

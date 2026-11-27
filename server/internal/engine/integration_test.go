@@ -413,7 +413,7 @@ func TestIntegrationLockIsExclusiveAcrossProcessesAndReleasedOnCrash(t *testing.
 
 	// Simulasi worker crash: sesi pemegang lock diputus paksa
 	if _, err := f.target.Exec(ctx, `SELECT pg_terminate_backend(pid) FROM pg_locks
-		WHERE locktype = 'advisory' AND classid = 17474 AND granted AND pid <> pg_backend_pid()`); err != nil {
+		WHERE locktype = 'advisory' AND granted AND pid <> pg_backend_pid()`); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(5 * time.Second)
