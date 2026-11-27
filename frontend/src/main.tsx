@@ -6,6 +6,8 @@ import { AuthProvider } from "./features/auth/auth";
 import { ToastProvider } from "./components/toast";
 import { router } from "./app/router";
 import { shouldRetry } from "./lib/retry";
+import "@fontsource-variable/literata";
+import "@fontsource-variable/source-sans-3";
 import "./index.css";
 
 const qc = new QueryClient({ defaultOptions: { queries: { refetchOnWindowFocus: false, retry: shouldRetry } } });

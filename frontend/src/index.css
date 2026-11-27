@@ -1,6 +1,40 @@
 @import "tailwindcss";
 
-/* [style] default border tailwind v4 = currentColor, ganti abu terang */
+/* [style] palet hangat ala kertas: tinta cokelat gelap, hijau hutan sebagai primary, terakota sebagai aksen */
+@theme {
+  --font-sans: "Source Sans 3 Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Literata Variable", Georgia, serif;
+
+  /* [style] skala slate ditimpa dengan netral hangat agar halaman lama ikut selaras sebelum didesain ulang */
+  --color-slate-50: #faf7f2;
+  --color-slate-100: #f2ede4;
+  --color-slate-200: #e8e0d4;
+  --color-slate-300: #d6ccbd;
+  --color-slate-400: #a39a8d;
+  --color-slate-500: #6f665c;
+  --color-slate-600: #574f47;
+  --color-slate-700: #433d37;
+  --color-slate-800: #302b27;
+  --color-slate-900: #2b2622;
+
+  --color-primary: #2f5d50;
+  --color-primary-hover: #244a40;
+  --color-primary-soft: #e4efea;
+  --color-primary-light: #3f7a68;
+  --color-primary-deep: #1c3f35;
+  --color-accent: #c2603a;
+  --color-accent-soft: #f7e6dd;
+  --color-ok: #2f6b3e;
+  --color-ok-soft: #e3f0e5;
+  --color-warn: #8a5a12;
+  --color-warn-soft: #f8ebcf;
+  --color-danger: #9b2f27;
+  --color-danger-soft: #f8e4e1;
+}
+
 @layer base {
+  /* [style] default border tailwind v4 = currentColor, ganti abu hangat terang */
   *, ::after, ::before { border-color: var(--color-slate-200); }
+  body { font-family: var(--font-sans); background: var(--color-slate-50); color: var(--color-slate-900); }
+  h1, h2, h3 { font-family: var(--font-serif); }
 }

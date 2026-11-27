@@ -8,7 +8,7 @@ import { StateError, useDb } from "./shared";
 type Picked = { schema: string; table: TableInfo };
 
 function Structure({ t }: { t: TableInfo }) {
-  const h = "mb-2 mt-5 text-sm font-medium first:mt-0";
+  const h = "mb-2 mt-6 font-serif text-base font-semibold first:mt-0";
   const code = "font-mono text-xs text-slate-600";
   return (
     <div>
@@ -62,7 +62,7 @@ function DataGrid({ dbId, schema, table }: { dbId: string; schema: string; table
   const to = d.offset + d.rows.length;
   return (
     <div>
-      <div className="max-h-[28rem] overflow-auto rounded border bg-white">
+      <div className="max-h-[28rem] overflow-auto rounded-2xl border bg-white shadow-sm">
         <table className="w-full">
           <thead className="sticky top-0 bg-slate-50">
             <tr>
@@ -88,7 +88,7 @@ function DataGrid({ dbId, schema, table }: { dbId: string; schema: string; table
         <div className="flex items-center gap-2">
           <label className="flex items-center gap-1 text-slate-500">
             Per halaman
-            <select className="rounded border border-slate-300 px-2 py-1 text-slate-900" value={limit}
+            <select className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-slate-900" value={limit}
               onChange={(e) => { setLimit(Number(e.target.value)); setOffset(0); }}>
               {[25, 50, 100, 200].map((n) => <option key={n}>{n}</option>)}
             </select>
@@ -118,17 +118,17 @@ export default function DatabaseViewer() {
 
   return (
     <div className="grid gap-6 md:grid-cols-[16rem_1fr]">
-      <aside aria-label="Schema" className="space-y-3 text-sm">
+      <aside aria-label="Schema" className="h-fit space-y-3 rounded-2xl border bg-white p-4 text-sm shadow-sm md:sticky md:top-20">
         {q.data.schemas.map((s) => (
           <details key={s.name} open>
-            <summary className="cursor-pointer font-medium">{s.name} <span className="text-slate-400">({s.tables.length})</span></summary>
+            <summary className="cursor-pointer font-serif font-semibold">{s.name} <span className="text-slate-400">({s.tables.length})</span></summary>
             <ul className="mt-1 space-y-0.5 border-l pl-2">
               {s.tables.map((t) => {
                 const active = sel.schema === s.name && sel.table.name === t.name;
                 return (
                   <li key={t.name}>
                     <button type="button" aria-current={active ? "true" : undefined} onClick={() => go(s.name, t.name, view)}
-                      className={`flex w-full items-center justify-between rounded px-2 py-1 text-left ${active ? "bg-slate-900 text-white" : "hover:bg-slate-100"}`}>
+                      className={`flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-left ${active ? "bg-primary-soft font-medium text-primary" : "hover:bg-slate-100"}`}>
                       <span className="truncate">{t.name}</span>
                       {t.type === "view" && <span className="text-xs opacity-70">view</span>}
                     </button>
@@ -141,14 +141,16 @@ export default function DatabaseViewer() {
       </aside>
       <section className="min-w-0">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-lg font-semibold">
+          <h2 className="text-xl font-semibold">
             <span className="text-slate-400">{sel.schema}.</span>{sel.table.name}{" "}
             <Badge>{sel.table.type}</Badge>
           </h2>
-          <div role="tablist" className="flex gap-1">
+          <div role="tablist" className="flex gap-1 rounded-full bg-slate-100 p-1">
             {(["struktur", "data"] as const).map((v) => (
-              <Button key={v} variant={view === v ? "primary" : "ghost"} role="tab" aria-selected={view === v}
-                onClick={() => go(sel.schema, sel.table.name, v)}>{v === "struktur" ? "Struktur" : "Data"}</Button>
+              <button key={v} type="button" role="tab" aria-selected={view === v} onClick={() => go(sel.schema, sel.table.name, v)}
+                className={`rounded-full px-4 py-1 text-sm font-medium transition-colors ${view === v ? "bg-white text-primary shadow-sm" : "text-slate-600 hover:text-slate-900"}`}>
+                {v === "struktur" ? "Struktur" : "Data"}
+              </button>
             ))}
           </div>
         </div>

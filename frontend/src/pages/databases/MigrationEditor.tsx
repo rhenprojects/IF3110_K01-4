@@ -34,23 +34,23 @@ function EditorForm({ db, mid, initial }: { db: DatabaseItem; mid?: string; init
   }
 
   return (
-    <form onSubmit={submit} className="max-w-3xl space-y-4">
+    <form onSubmit={submit} className="max-w-3xl space-y-5 rounded-2xl border bg-white p-6 shadow-sm">
       <ErrorBox message={generalError(save.error, FIELDS)} />
       <Field label="Nama migration" error={fieldError(save.error, "name")} hint="Maksimal 200 karakter">
         <input className={inputCls} value={name} maxLength={200} onChange={(e) => setName(e.target.value)} required />
       </Field>
       <Field label="SQL" error={fieldError(save.error, "sql")}
         hint={`${sql.split("\n").length} baris · ${sql.length} karakter`}>
-        <textarea wrap="off" className={`${inputCls} h-72 resize-y overflow-auto whitespace-pre font-mono`} value={sql} spellCheck={false}
+        <textarea wrap="off" className={`${inputCls} h-72 resize-y overflow-auto whitespace-pre bg-slate-50 font-mono`} value={sql} spellCheck={false}
           placeholder="ALTER TABLE customers ADD COLUMN phone text;" onChange={(e) => setSql(e.target.value)} required />
       </Field>
       {isDestructive(sql) && (
-        <p role="status" className="rounded bg-amber-50 px-3 py-2 text-sm text-amber-800">
+        <p role="status" className="rounded-lg bg-warn-soft px-3 py-2 text-sm text-warn">
           SQL ini berisi perintah destruktif (DROP / TRUNCATE / DELETE). Periksa lagi sebelum dijalankan.
         </p>
       )}
       <label className="flex items-start gap-2 text-sm">
-        <input type="checkbox" className="mt-1" checked={irreversible} onChange={(e) => setIrreversible(e.target.checked)} />
+        <input type="checkbox" className="mt-1 size-4 accent-primary" checked={irreversible} onChange={(e) => setIrreversible(e.target.checked)} />
         <span>Migration ini <b>tidak bisa dibatalkan</b> (irreversible), misalnya karena menghapus data permanen.</span>
       </label>
       {irreversible ? (
@@ -61,7 +61,7 @@ function EditorForm({ db, mid, initial }: { db: DatabaseItem; mid?: string; init
       ) : (
         <Field label="SQL down (rollback)" error={fieldError(save.error, "sql_down")}
           hint="Membatalkan SQL di atas. Wajib sebelum migration bisa dijalankan.">
-          <textarea wrap="off" className={`${inputCls} h-40 resize-y overflow-auto whitespace-pre font-mono`} value={sqlDown} spellCheck={false}
+          <textarea wrap="off" className={`${inputCls} h-40 resize-y overflow-auto whitespace-pre bg-slate-50 font-mono`} value={sqlDown} spellCheck={false}
             placeholder="ALTER TABLE customers DROP COLUMN phone;" onChange={(e) => setSqlDown(e.target.value)} />
         </Field>
       )}
@@ -92,7 +92,7 @@ export default function MigrationEditor() {
 
   return (
     <div>
-      <h2 className="mb-4 text-lg font-semibold">{mid ? "Edit draft migration" : "Migration baru"}</h2>
+      <h2 className="mb-4 text-2xl font-semibold">{mid ? "Edit draft migration" : "Migration baru"}</h2>
       {mid && q.isLoading && <Loading />}
       {mid && q.error && <StateError error={q.error} onRetry={() => q.refetch()} />}
       {mid && q.data && q.data.status !== "draft" && (

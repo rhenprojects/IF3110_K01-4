@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useDecideChangeRequest, usePendingReviews } from "../features/databases/hooks";
-import { Button, EmptyState, ErrorBox, Field, Loading, Modal, PageHeader, Table, generalError, inputCls, td } from "../components/ui";
+import { Banner, BannerStat } from "../components/Banner";
+import { InboxIcon } from "../components/icons";
+import { Button, EmptyState, ErrorBox, Field, Loading, Modal, Table, generalError, inputCls, td } from "../components/ui";
 import { useToast } from "../components/toast";
 import { fmtDate } from "../lib/format";
 import type { ChangeRequest } from "../lib/types";
@@ -34,10 +36,10 @@ export default function Reviews() {
 
   return (
     <div>
-      <PageHeader title="Review menunggu keputusan" />
-      <p className="mb-4 text-sm text-slate-500">
-        Pengajuan di database yang diakses group kamu sebagai Team Leader. Migration baru dijalankan setelah semua group menyetujui; satu penolakan membatalkan pengajuan.
-      </p>
+      <Banner title="Review" icon={<InboxIcon />}
+        caption="Pengajuan di database yang diakses group kamu sebagai Team Leader. Migration baru dijalankan setelah semua group menyetujui; satu penolakan membatalkan pengajuan.">
+        {q.data && <BannerStat value={q.data.length} label="menunggu keputusanmu" />}
+      </Banner>
       {q.isLoading && <Loading />}
       {q.error && <StateError error={q.error} onRetry={() => q.refetch()} />}
       {q.data?.length === 0 && <EmptyState title="Tidak ada pengajuan" hint="Pengajuan yang butuh persetujuanmu akan muncul di sini." />}
