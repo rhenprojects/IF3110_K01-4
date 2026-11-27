@@ -116,7 +116,7 @@
       },
       "targets": [
         {
-          "expr": "sum(migration_batch_total)",
+          "expr": "sum(migration_batch_total) or vector(0)",
           "instant": true
         }
       ]
@@ -136,7 +136,7 @@
       },
       "targets": [
         {
-          "expr": "sum(migration_batch_total{status=~\"failed|partial\"})",
+          "expr": "sum(migration_batch_total{status=~\"failed|partial\"}) or vector(0)",
           "instant": true
         }
       ]
@@ -156,7 +156,7 @@
       },
       "targets": [
         {
-          "expr": "sum(migration_batch_items_total{status=\"success\"})",
+          "expr": "sum(migration_batch_items_total{status=\"success\"}) or vector(0)",
           "instant": true
         }
       ]

@@ -81,6 +81,19 @@ var (
 // jobStatuses dipakai agar status yang tidak muncul di query tetap 0 (bukan hilang).
 var jobStatuses = []string{"queued", "running", "success", "partial", "failed", "uncertain", "cancelled"}
 
+// init membuat deret metrik batch dengan nilai 0. CounterVec/HistogramVec baru
+// muncul di /metrics setelah dipakai, sehingga dashboard menampilkan "No data"
+// sampai batch pertama selesai. Dengan deret 0, panel langsung menunjukkan 0.
+func init() {
+	for _, status := range []string{"success", "partial", "failed", "cancelled"} {
+		batchTotal.WithLabelValues(status).Add(0)
+	}
+	for _, status := range []string{"success", "failed"} {
+		itemsTotal.WithLabelValues(status).Add(0)
+		itemDuration.WithLabelValues(status)
+	}
+}
+
 // ObserveItem records the terminal status and duration of one batch item.
 func ObserveItem(status string, durationMs int64) {
 	itemsTotal.WithLabelValues(status).Inc()
