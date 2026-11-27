@@ -308,6 +308,12 @@ func findJob(tx *gorm.DB, cr *models.ChangeRequest) (string, error) {
 	return ids[0], nil
 }
 
+// StillValid dipakai worker untuk revalidation setelah lock: aturan yang sama dengan saat dispatch, diterapkan
+// pada job yang akan dijalankan.
+func StillValid(tx *gorm.DB, job *models.MigrationJob) error {
+	return checkStillValid(tx, &models.ChangeRequest{MigrationID: job.MigrationID, Kind: job.Kind, RollbackOf: job.RollbackOf})
+}
+
 // checkStillValid memastikan rollback/forward yang sudah disetujui masih sesuai keadaan terkini.
 func checkStillValid(tx *gorm.DB, cr *models.ChangeRequest) error {
 	if cr.Kind == models.JobKindUp || cr.Kind == models.JobKindRevert {
