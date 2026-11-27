@@ -1,6 +1,7 @@
 package api
 
 import (
+	"web_backend/internal/audit"
 	"web_backend/internal/authctx"
 	databasehandler "web_backend/internal/database_handler"
 	"web_backend/internal/engine"
@@ -19,6 +20,7 @@ var benchRawBody = []byte(`{"status":"ok"}`)
 
 func SetupRoutes(app *fiber.App, db *gorm.DB, connService *targetdb.Service, devAuth bool, sessions *userhandler.SessionService, eng *engine.Engine) {
 	app.Use(middleware.SecurityHeaders)
+	app.Use(audit.Middleware(db))
 	api := app.Group("/api/v1")
 
 	// Route publik (health, echo, login) harus didaftarkan sebelum grup
@@ -87,4 +89,15 @@ func SetupRoutes(app *fiber.App, db *gorm.DB, connService *targetdb.Service, dev
 	dbHandler := databasehandler.NewHandlerWithEngine(db, connService, eng)
 	dbHandler.RegisterRoutes(protected)
 	dbHandler.RegisterBatchRoutes(protected)
+	protected.Get("/admin/audit", authctx.RequireAdmin, func(c *fiber.Ctx) error {
+		if db == nil {
+			return httpx.Error(c, fiber.StatusServiceUnavailable, "Database is not connected")
+		}
+		limit := 100
+		var logs []models.AuditLog
+		if err := db.WithContext(c.UserContext()).Order("id DESC").Limit(limit).Find(&logs).Error; err != nil {
+			return httpx.Error(c, fiber.StatusInternalServerError, "Internal server error")
+		}
+		return c.JSON(fiber.Map{"logs": logs})
+	})
 }

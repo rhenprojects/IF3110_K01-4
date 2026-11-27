@@ -5,6 +5,7 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"web_backend/internal/audit"
 	"web_backend/internal/authctx"
 	"web_backend/internal/httpx"
 	"web_backend/internal/models"
@@ -75,10 +76,12 @@ func (h *UserHandler) Login(c *fiber.Ctx) error {
 	if !CheckPassword(user.Password, req.Password) {
 		h.loginLimiter.fail(limitKey)
 		h.ipLimiter.fail(ipKey)
+		audit.Log(h.DB, "", "login_failed", "user", username, c.IP(), "invalid credentials")
 		return httpx.Error(c, fiber.StatusUnauthorized, "Invalid username or password")
 	}
 	h.loginLimiter.reset(limitKey)
 	h.ipLimiter.reset(ipKey)
+	audit.Log(h.DB, user.ID, "login", "user", user.ID, c.IP(), "")
 
 	if _, _, err := h.Sessions.Create(c, user.ID); err != nil {
 		log.Printf("[user] create session failed: %v", err)

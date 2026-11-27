@@ -91,6 +91,17 @@ function advanceJob(s: Store, conn: Connection, j: MigrationJob) {
     if (final && j.kind === "up") Object.assign(m, { status: "failed", error: j.error, updated_at: now() });
     return;
   }
+  if (m.batch_size > 0 && j.kind === "up" && (m.batch_chunks ?? 0) < 2) {
+    Object.assign(m, {
+      batch_status: "running",
+      batch_rows: (m.batch_rows ?? 0) + m.batch_size,
+      batch_chunks: (m.batch_chunks ?? 0) + 1,
+      batch_cursor: (m.batch_cursor ?? 0) + m.batch_size,
+      updated_at: now(),
+    });
+    j.updated_at = now();
+    return;
+  }
   const t0 = performance.now();
   let error = "";
   const rollback = j.kind === "rollback";
@@ -100,6 +111,7 @@ function advanceJob(s: Store, conn: Connection, j: MigrationJob) {
       m.status = "success";
       m.version = m.version ?? Math.max(0, ...list.map((x) => x.version ?? 0)) + 1;
       m.error = "";
+      if (m.batch_size > 0) Object.assign(m, { batch_status: "success", batch_rows: 5000, batch_chunks: 2 });
     }
   } catch (e) {
     error = (e as Error).message;
