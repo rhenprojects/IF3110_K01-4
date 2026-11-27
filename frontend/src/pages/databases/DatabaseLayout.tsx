@@ -1,9 +1,12 @@
 import { Link, NavLink, Outlet, useLocation, useParams } from "react-router-dom";
 import { useDatabase } from "../../features/databases/hooks";
-import { Banner, bannerTab as tab } from "../../components/Banner";
 import { DatabaseIcon } from "../../components/icons";
 import { Loading } from "../../components/ui";
 import { LevelBadge, StateError } from "./shared";
+
+//[tab] halaman ini berlatar terang, jadi tab tidak memakai gaya banner (teks putih)
+const tab = ({ isActive }: { isActive: boolean }) =>
+  `shrink-0 whitespace-nowrap rounded-full px-4 py-1.5 text-sm font-medium transition-colors ${isActive ? "bg-primary text-white shadow-sm" : "text-slate-600 hover:bg-slate-100"}`;
 
 //[layout] memuat info database + level efektif; 403/404/502 ditangani di sini sekali untuk semua sub-halaman
 export default function DatabaseLayout() {
