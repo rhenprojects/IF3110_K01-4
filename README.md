@@ -288,6 +288,45 @@ Contoh satu span mentah dari exporter console:
 
 Query viewer menghasilkan span `viewer.read` dengan anak `db.query` per query. Error dan durasi tercatat di setiap span.
 
+## Stress test dengan k6 (bonus)
+
+Script: [`scripts/k6-stress.js`](scripts/k6-stress.js), dijalankan lewat [`scripts/k6-stress.sh`](scripts/k6-stress.sh) (memakai binary `k6` bila ada, atau image `grafana/k6` di network Docker yang sama dengan backend).
+
+Yang diukur sekaligus:
+
+- **Akses API** (`GET /databases`, `/migrations`, `/migrations/:mid`, `/jobs`) dengan beban yang naik bertahap lalu turun.
+- **Pengiriman migration** (`POST /migrations` + `POST /migrations/:mid/change-requests`) berjalan bersamaan.
+- **Eksekusi** diverifikasi terpisah: script menyetujui pengajuan lewat bulk approve sebagai `LEADER_USERNAME`, lalu memantau queue sampai kosong dan menghitung waktu tunggu queue + durasi job. Respons pengiriman tidak dianggap bukti eksekusi.
+
+```sh
+LEADER_USERNAME=tokdalang LEADER_PASSWORD=... DB_ID=<uuid-koneksi> ./scripts/k6-stress.sh
+# atur beban: PEAK_VUS=20 HOLD=40s SUBMIT_VUS=2 PREPARE=12
+# threshold bisa diubah: READ_P95_MS=800 SUBMIT_P95_MS=1500 ERROR_RATE=0.01
+```
+
+Threshold default: `http_req_failed < 1%`, p95 baca `< 800 ms`, p95 pengiriman `< 1500 ms`.
+
+Hasil pada mesin pengembangan (Docker Compose, satu database target, 1 worker pool 2 goroutine; job memakai `SELECT 1`):
+
+| Beban | Throughput | p95 baca | p95 kirim | Error | Queue wait p95 | Durasi job p95 |
+|---|---:|---:|---:|---:|---:|---:|
+| 5 VU | 12,9 req/s | 3,02 ms | 10,03 ms | 0% | 12,09 ms | 2,04 s* |
+| 10 VU | 23,1 req/s | 3,16 ms | 9,63 ms | 0% | 11,39 ms | 2,04 s* |
+| 20 VU | 44,3 req/s | 3,58 ms | 9,73 ms | 0% | 10,69 ms | 2,04 s* |
+| Ramp 1→10→0 (40 s) | 21,6 req/s | 2,36 ms | 10,59 ms | 0% | 12,79 ms | 2,04 s* |
+
+\* median durasi job 4 ms; nilai p90/p95 2,04 s berasal dari satu job pertama yang menunggu siklus poll worker. Bukan bottleneck.
+
+Analisis:
+
+- Latency baca hanya naik 3,02 → 3,58 ms saat beban 4×, dan throughput naik hampir linear (12,9 → 44,3 req/s). Backend belum mendekati saturasi pada beban normal tim (20 VU); threshold p95 800 ms menyisakan headroom besar.
+- Jalur pengiriman stabil ±10 ms di semua tingkat, jadi penambahan beban baca tidak memperlambat create/submit.
+- Queue wait tetap ±10 ms karena job uji selesai seketika. Untuk melihat serialisasi yang sebenarnya, jalankan dengan job lebih berat: `JOB_SQL="SELECT pg_sleep(0.5)"` — waktu tunggu queue akan mendekati kelipatan durasi job karena satu database hanya menjalankan satu migration.
+- Tidak ada error di semua tingkat (0 dari 3.517 request); seluruh threshold lulus.
+- Di luar cakupan run ini: pengujian dua database berbeda. Jalankan script dua kali dengan `DB_ID` berbeda — secara desain keduanya dieksekusi paralel, sedangkan di database yang sama job diantrikan.
+
+Catatan: setiap run membuat migration `k6-stress-*` dan `k6-submit-*` yang **permanen** di riwayat (riwayat tidak bisa dihapus), jadi jalankan pada database demo/bench khusus.
+
 ## Dokumentasi lain
 
 - [`docs/api-contract.md`](docs/api-contract.md) — kontrak API (endpoint, request, response, kode error) dan ketentuan sistem

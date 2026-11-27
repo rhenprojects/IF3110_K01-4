@@ -63,3 +63,4 @@ sh scripts/invoker.sh test-all    # unit + integration + API smoke
 | 32 | HTTPS lokal + HSTS | `https://localhost`, header `Strict-Transport-Security` | PASS |
 | 33 | Audit log login dan mutasi API | `GET /admin/audit`, tabel `audit_logs` | PASS |
 | 34 | Setujui banyak pengajuan sekaligus; tiap request tetap dinilai sendiri (leader, self-approval, queue) | `TestIntegrationBulkApproveChangeRequests`, `POST /databases/:id/change-requests/approve` | PASS |
+| 35 | Bonus stress test k6: beban bertahap naik/turun, threshold p95 & error rate, queue wait dan durasi job | `scripts/k6-stress.sh`, hasil di README bagian "Stress test dengan k6" | PASS |
