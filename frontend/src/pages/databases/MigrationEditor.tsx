@@ -20,6 +20,17 @@ function EditorForm({ db, mid, initial }: { db: DatabaseItem; mid?: string; init
   const [irreversible, setIrreversible] = useState(initial.irreversible ?? false);
   const [reason, setReason] = useState(initial.irreversible_reason ?? "");
 
+  //[batch] beri tahu lebih awal sebelum submit ditolak 400 oleh backend
+  const batchSizeNumber = Number(batchSize) || 0;
+  const batchProblem =
+    batchSizeNumber <= 0
+      ? ""
+      : !sql.includes(":last_id") || !sql.includes(":batch_size") || !/order\s+by/i.test(sql)
+        ? "Mode batch aktif: SQL up wajib memuat :last_id, :batch_size, dan ORDER BY id."
+        : !sqlDown.includes(":from_id") || !sqlDown.includes(":to_id")
+          ? "Mode batch aktif: SQL down wajib memuat :from_id dan :to_id."
+          : "";
+
   async function submit(e: FormEvent) {
     e.preventDefault();
     try {
@@ -49,6 +60,9 @@ function EditorForm({ db, mid, initial }: { db: DatabaseItem; mid?: string; init
         <p role="status" className="rounded-lg bg-warn-soft px-3 py-2 text-sm text-warn">
           SQL ini berisi perintah destruktif (DROP / TRUNCATE / DELETE). Periksa lagi sebelum dijalankan.
         </p>
+      )}
+      {batchProblem && (
+        <p role="alert" className="rounded-lg bg-warn-soft px-3 py-2 text-sm text-warn">{batchProblem}</p>
       )}
       <label className="flex items-start gap-2 text-sm">
         <input type="checkbox" className="mt-1 size-4 accent-primary" checked={irreversible} onChange={(e) => setIrreversible(e.target.checked)} />
