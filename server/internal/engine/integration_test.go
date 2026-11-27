@@ -539,6 +539,61 @@ func TestIntegrationRollbackAndForwardUseOriginalSQL(t *testing.T) {
 	}
 }
 
+func TestIntegrationWorkerRevalidatesAfterLock(t *testing.T) {
+	f := setup(t)
+	eng := f.engine()
+
+	// Keadaan berubah setelah job masuk queue (mis. approval dibatalkan): worker harus menolak tanpa menjalankan SQL.
+	m := f.migration(f.connID, "revoked", `CREATE TABLE `+f.s()+`.reval (id int)`, `DROP TABLE `+f.s()+`.reval`)
+	queued := f.enqueue(eng, f.connID, m.ID, models.JobKindUp, "")
+	f.db.Model(&models.Migration{}).Where("id = ?", m.ID).Update("status", models.MigrationDraft)
+	stop := eng.Start(1)
+
+	done := f.waitJob(queued.ID)
+	stop() // engine kedua di bawah harus satu-satunya worker
+	if done.Status != models.JobFailed || done.Attempts != 1 || !strings.Contains(done.Error, "revalidation failed") {
+		t.Fatalf("job = %+v", done)
+	}
+	if f.tableExists("reval") {
+		t.Error("SQL ran although revalidation failed")
+	}
+	if got := f.reloadMigration(m.ID); got.Status != models.MigrationDraft || got.Version != nil {
+		t.Errorf("rejected attempt must not change the migration: %+v", got)
+	}
+	if execs := f.executions(m.ID); len(execs) != 1 || execs[0].Status != models.ExecutionFailed {
+		t.Errorf("rejected attempt must be recorded once: %+v", execs)
+	}
+
+	// Aturan berbasis riwayat dari opts.Revalidate (di aplikasi: review.StillValid) ikut diperiksa.
+	errStale := errors.New("rollback target changed")
+	strict, err := engine.New(f.db, f.pools, engine.Options{
+		PollEvery: 20 * time.Millisecond, HeartbeatEvery: 100 * time.Millisecond, StaleAfter: time.Second,
+		Logger: slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		Revalidate: func(_ *gorm.DB, job *models.MigrationJob) error {
+			if job.Kind == models.JobKindRollback {
+				return errStale
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(strict.Start(1))
+	kept := f.migration(f.connID, "kept", `CREATE TABLE `+f.s()+`.kept (id int)`, `DROP TABLE `+f.s()+`.kept`)
+	up := f.waitJob(f.enqueue(strict, f.connID, kept.ID, models.JobKindUp, "").ID)
+	if up.Status != models.JobSuccess {
+		t.Fatalf("up = %+v", up)
+	}
+	rollback := f.waitJob(f.enqueue(strict, f.connID, kept.ID, models.JobKindRollback, up.ExecutionID).ID)
+	if rollback.Status != models.JobFailed || !strings.Contains(rollback.Error, errStale.Error()) {
+		t.Fatalf("rollback = %+v", rollback)
+	}
+	if !f.tableExists("kept") {
+		t.Error("rollback SQL ran although revalidation failed")
+	}
+}
+
 func TestIntegrationForwardRetriesFailedMigration(t *testing.T) {
 	f := setup(t)
 	eng := f.engine()
