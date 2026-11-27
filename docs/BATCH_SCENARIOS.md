@@ -1,121 +1,217 @@
-# Skenario Uji Batch — matriks
+# Skenario Uji Batch — 73 kasus
 
-Daftar skenario khusus **migration per potongan row** (`batch_size > 0`). Kontrak SQL, checkpoint, dan metrik dijelaskan di [`BATCH_TESTING.md`](BATCH_TESTING.md); panduan klik di [`MANUAL_UI_TESTING.md`](MANUAL_UI_TESTING.md).
+Matriks uji untuk mode **migration per potongan row** (`batch_size > 0`). Setiap baris punya input konkret dan hasil yang diharapkan.
 
-Legenda kolom **Jenis**: `A` = otomatis (bisa ditambah ke `server/internal/engine/integration_test.go` atau `database_handler`), `M` = manual (script/UI). Kolom **Bukti** adalah test yang sudah ada atau endpoint yang dipakai.
+Legenda **Jenis**: `A` = otomatis (bisa dijadikan test Go), `M` = manual (UI/psql). Kolom **Input** merujuk ke bank SQL di bawah.
 
-## A. Validasi definisi (sebelum dieksekusi)
+## Bank SQL
 
-| ID | Aksi | Harapan | Jenis | Bukti |
+**S1 — seed 100.000 row** (migration `batch_size = 0`, SQL up):
+
+```sql
+CREATE TABLE demo_rows AS
+SELECT g::bigint AS id, false AS processed
+FROM generate_series(1, 100000) g;
+```
+
+SQL down: `DROP TABLE demo_rows;`
+
+**S2 — batch up**:
+
+```sql
+UPDATE demo_rows SET processed = true
+WHERE id IN (SELECT id FROM demo_rows WHERE id > :last_id ORDER BY id LIMIT :batch_size);
+```
+
+**S3 — batch down** (wajib untuk semua batch):
+
+```sql
+UPDATE demo_rows SET processed = false
+WHERE id >= :from_id AND id <= :to_id;
+```
+
+**S4 — batch lambat** (untuk uji cancel; 0,2 detik per chunk):
+
+```sql
+UPDATE demo_rows SET processed = true FROM (SELECT pg_sleep(0.2)) s
+WHERE id IN (SELECT id FROM demo_rows WHERE id > :last_id ORDER BY id LIMIT :batch_size);
+```
+
+**S5 — batch yang gagal di chunk kedua**:
+
+```sql
+-- seed: CREATE TABLE fail_rows(id bigint PRIMARY KEY, val int NOT NULL CHECK (val >= 0));
+--       INSERT INTO fail_rows SELECT g, 0 FROM generate_series(1, 5000) g;
+UPDATE fail_rows SET val = CASE WHEN id > 2000 THEN -1 ELSE 1 END
+WHERE id IN (SELECT id FROM fail_rows WHERE id > :last_id ORDER BY id LIMIT :batch_size);
+```
+
+**S6 — batch dengan CTE**:
+
+```sql
+WITH picked AS (
+  SELECT id FROM demo_rows WHERE id > :last_id ORDER BY id LIMIT :batch_size
+)
+UPDATE demo_rows d SET processed = true FROM picked p WHERE d.id = p.id;
+```
+
+**S7 — batch dengan join/FROM**:
+
+```sql
+UPDATE demo_rows d SET processed = true
+FROM (SELECT id FROM demo_rows WHERE id > :last_id ORDER BY id LIMIT :batch_size) p
+WHERE d.id = p.id;
+```
+
+**S8 — id tidak kontinu** (seed): `SELECT (g * 10)::bigint AS id, false AS processed FROM generate_series(1, 5000) g`
+
+**S9 — id mulai 0 dan negatif** (seed): `SELECT (g - 10)::bigint AS id, false AS processed FROM generate_series(1, 30) g`
+
+**S10 — tabel tanpa kolom id**: `CREATE TABLE no_id(kunci int);` + batch SQL S2 versi `no_id`
+
+**S11 — RETURNING bukan bigint**:
+
+```sql
+UPDATE demo_rows SET processed = true
+WHERE id IN (SELECT id FROM demo_rows WHERE id > :last_id ORDER BY id LIMIT :batch_size)
+RETURNING processed;
+```
+
+**S12 — reset data**: `UPDATE demo_rows SET processed = false;`
+
+## A. Validasi definisi
+
+| ID | Skenario | Input | Harapan | Jenis |
 |---|---|---|---|---|
-| B01 | `batch_size = 0` | Jalur migration biasa (bukan batch), tanpa checkpoint | A | `TestIntegrationMigrationLifecycle` |
-| B02 | `batch_size = -1` atau `1000001` | `400`, field `batch_size` | A | `TestValidateDefinition` |
-| B03 | `batch_size = 1000000` | Diterima (batas atas) | A | `TestValidateDefinition` |
-| B04 | `batch_size > 0` + `irreversible = true` | `400`, field `batch_size` | A | `TestValidateDefinition` |
-| B05 | SQL up tidak memakai `:last_id`, `:batch_size`, atau `ORDER BY` | `400`, field `sql` | A | `TestValidateDefinition` |
-| B06 | SQL up diawali `SELECT`/`INSERT` | `400`, field `sql` (harus UPDATE/DELETE/WITH) | A | `TestValidateDefinition` |
-| B07 | SQL down tanpa `:from_id`/`:to_id`, atau kosong | `400`, field `sql_down` | A | `TestValidateDefinition` |
-| B08 | SQL up sudah punya `RETURNING kolom_lain` | Job gagal `batch SQL must return bigint id`, migration `partial` | A | `executeChunked` scan |
-| B09 | Tabel target tanpa kolom `id`, atau `id` bukan bigint (mis. `uuid`) | Job gagal saat chunk (`must return bigint id`), migration `partial` | M | log backend |
+| B01 | Batch size 0 | migration batch size `0` | Jalur migration biasa, tanpa checkpoint | A |
+| B02 | Batch size negatif | `-1` | `400` field `batch_size` | A |
+| B03 | Batch size di atas batas | `1000001` | `400` field `batch_size` | A |
+| B04 | Batch size batas atas | `1000000` | Diterima | A |
+| B05 | Batch + irreversible | batch size `1000` + centang irreversible | `400` field `batch_size` | A |
+| B06 | Tanpa `:last_id` | S2 dihapus `:last_id` | `400` field `sql` | A |
+| B07 | Tanpa `:batch_size` | S2 dihapus `:batch_size` | `400` field `sql` | A |
+| B08 | Tanpa `ORDER BY` | S2 dihapus `ORDER BY` | `400` field `sql` | A |
+| B09 | Bukan UPDATE/DELETE/WITH | `SELECT 1` | `400` field `sql` | A |
+| B10 | Down tanpa placeholder | S3 dihapus `:from_id` | `400` field `sql_down` | A |
+| B11 | Down kosong | SQL down dikosongkan | `400` field `sql_down` | A |
+| B12 | `RETURNING` bukan bigint | S11 | Job `partial`, error "must return bigint id" | A |
+| B13 | Tabel tanpa kolom `id` | S10 | Job `partial`, error saat chunk pertama | M |
 
 ## B. Izin dan approval
 
-| ID | Aksi | Harapan | Jenis | Bukti |
+| ID | Skenario | Input | Harapan | Jenis |
 |---|---|---|---|---|
-| B10 | User `view` atau user tanpa akses mengajukan batch | `403` | A | `TestIntegrationChangeRequestApprovalFlow` |
-| B11 | Approve (up maupun revert) oleh user bukan leader | `403` | A | `TestIntegrationBulkApproveChangeRequests` |
-| B12 | Leader A setuju, leader B belum | Migration tetap `pending_review`, belum ada job | A | `TestIntegrationChangeRequestApprovalFlow` |
-| B13 | Leader terakhir setuju | `approved` + job masuk queue | A | idem |
-| B14 | Leader menolak | `rejected`; migration `up` kembali `draft` (batch tetap tersimpan) | A | `TestIntegrationChangeRequestReject` |
-| B15 | Group pemilik akses belum punya leader | Submit `409` | A | `TestIntegrationChangeRequestRequiresLeaders` |
+| B14 | Viewer mengajukan batch | login `upin` dengan akses view saja | `403` | A |
+| B15 | Tanpa akses mengajukan | akun di luar group | `403` | A |
+| B16 | Non-leader approve (up) | `upin` klik Setujui | `403` | A |
+| B17 | Non-leader approve (revert) | `upin` approve CR revert | `403` | A |
+| B18 | Satu dari dua leader approve | group A setuju, group B belum | Tetap `pending_review`, belum ada job | A |
+| B19 | Leader terakhir approve | semua group setuju | `approved` + job masuk queue | A |
+| B20 | Leader menolak | klik Tolak | `rejected`, migration `up` kembali `draft` | A |
+| B21 | Group tanpa leader | hapus leader group | Submit `409` | A |
+| B22 | Approve dua kali | approve request yang sudah diputuskan | `409` | A |
 
-## C. Eksekusi normal
+## C. Eksekusi dan checkpoint
 
-| ID | Data | Harapan | Jenis | Bukti |
+| ID | Skenario | Input | Harapan | Jenis |
 |---|---|---|---|---|
-| B16 | 2.500 row dengan batch 1.000 (sisa) atau 5.000 (lebih besar dari data) | 3 chunk (1.000/1.000/500) atau 1 chunk; `batch_rows=2500` | A | `TestIntegrationChunkedMigrationCheckpointsAndCommits` |
-| B17 | Tabel kosong | `success`, `batch_rows=0`, `batch_chunks=0` | A | kode: `n == 0` |
-| B18 | 3 row, batch 1 | 3 chunk, cursor naik 1 tiap chunk | A | variasi |
-| B19 | id tidak kontinu (1, 10, 100, 1000), batch 2 | 2 chunk, `from_id`/`to_id` = min/max id hasil chunk | M | query `_dbmp.batch_chunks` |
-| B20 | 1.000.000 row, batch 10.000 | 100 chunk, `row_salah=0`, baseline > 1 detik | M | `scripts/dataset-batch.sh` |
-| B21 | UPDATE dengan subquery/`FROM` join | Sukses; setiap chunk memproses `batch_size` row | M | manual |
-| B22 | Baris baru masuk saat run berjalan: id > cursor ikut diproses, id <= cursor tidak | Sesuai cakupan cursor (didokumentasikan) | M | manual |
-| B23 | UPDATE mengubah kolom `id` | **Jangan dilakukan**: cursor bisa melompat/berulang; SQL harus memakai kolom id yang tidak berubah | M | aturan spek "batch by attribute" |
+| C01 | Chunk dengan sisa | 2.500 row, batch `1000` | 3 chunk: 1000/1000/500 | A |
+| C02 | Data lebih kecil dari batch | 2.500 row, batch `5000` | 1 chunk | A |
+| C03 | Tabel kosong | tabel 0 row, batch `1000` | `success`, rows 0, chunks 0 | A |
+| C04 | Batch size 1 | 3 row, batch `1` | 3 chunk | A |
+| C05 | Data besar | 100.000 row, batch `5000` (S1+S2) | 20 chunk, `batch_rows=100000` | M |
+| C06 | Id tidak kontinu | S8, batch `1000` | Chunk memakai min/max id hasil query | M |
+| C07 | Id 0 dan negatif | S9, batch `10` | Row dengan id <= 0 tidak pernah diproses (celah #1) | M |
+| C08 | CTE batch | S6 | Sukses, jumlah chunk sama seperti S2 | M |
+| C09 | Batch dengan join/FROM | S7 | Sukses, tiap chunk `batch_size` row | M |
+| C10 | SQL sudah punya `RETURNING id` | S2 + `RETURNING id` | Sukses, tidak dobel `RETURNING` | M |
+| C11 | Baris baru saat run berjalan | insert id > cursor di tengah run | Ikut diproses chunk berikutnya | M |
+| C12 | Baris baru id <= cursor | insert id lebih kecil di tengah run | Tidak diproses | M |
+| C13 | SQL mengubah kolom id | update `id = id + 1000000` | **Jangan dipakai**: cursor melompat | M |
 
-## D. Kegagalan di tengah proses
+## D. Kegagalan dan pemulihan
 
-| ID | Aksi | Harapan | Jenis | Bukti |
+| ID | Skenario | Input | Harapan | Jenis |
 |---|---|---|---|---|
-| B24 | Error pada chunk ke-2 (mis. `1/0` untuk id > 1.000) | Chunk 1 tetap committed, chunk 2 rollback, migration `partial`, cursor = `max(to_id)` chunk 1 | A | `TestIntegrationBatchResumeRequiresApproval` (gate) |
-| B25 | Error pada chunk pertama | `partial` dengan `batch_rows=0`, `batch_chunks=0`, `error` terisi | A | variasi |
-| B26 | Statement/job timeout pada satu chunk | `partial` dengan `error` timeout; chunk sebelumnya tetap | M | log backend |
-| B27 | Worker mati **setelah** commit chunk tapi sebelum mirror cursor | Checkpoint di target sudah commit; resume tidak mengulang chunk itu | A | `TestIntegrationChunkedMigrationResumesFromTargetCheckpoint` |
-| B28 | Worker mati **sebelum** commit | Chunk itu rollback; resume mengulang chunk tersebut; hasil akhir tetap benar | A | idem |
-| B29 | Ada migration lain `partial` di database yang sama | Job migration lain ditahan queue sampai resume/revert | A | `worker.claimSQL` |
+| D01 | Gagal di chunk kedua | S5, batch `1000` | Chunk 1 tetap, chunk 2 rollback, status `partial`, cursor = akhir chunk 1 | A |
+| D02 | Gagal di chunk pertama | S5 dengan constraint sejak id 1 | `partial`, rows 0, chunks 0 | A |
+| D03 | Timeout per chunk | S4 + `MIGRATION_TIMEOUT_SECONDS=1` | `partial`, error timeout, chunk sebelumnya tetap | M |
+| D04 | Worker mati setelah commit | hentikan backend saat run | Checkpoint target tetap, resume tidak mengulang chunk | A |
+| D05 | Worker mati sebelum commit | hentikan backend di tengah chunk | Chunk itu rollback, diulang saat resume | A |
+| D06 | Migration lain `partial` | jalankan migration kedua di DB sama | Job kedua ditahan queue | A |
+| D07 | Retry attempt > 1 | job gagal sementara | `migration_retries_total` naik | A |
+| D08 | Hasil commit tidak pasti | job `uncertain` setelah crash | Diperiksa lewat bukti `_dbmp.executions` sebelum retry | A |
 
 ## E. Cancel, resume, revert
 
-| ID | Aksi | Harapan | Jenis | Bukti |
+| ID | Skenario | Input | Harapan | Jenis |
 |---|---|---|---|---|
-| B30 | Cancel saat `batch_status=running`, sekali atau dua kali | `202` `stop_requested` (idempoten); berhenti di batas chunk; migration `partial`; flag direset | A | `TestIntegrationChunkedMigrationCancelRevertsCommittedChunks` |
-| B31 | Cancel saat job masih `queued` (belum mulai) | `409` (belum ada checkpoint untuk revert) — lihat "Celah" | A | perilaku sekarang |
-| B32 | Cancel pada migration non-batch | `400`, field `batch_size` | A | handler |
-| B33 | Resume saat status bukan `partial`, atau resume ganda selagi CR berjalan | `409` | A | `TestIntegrationBatchResumeRequiresApproval` |
-| B34 | Resume pada `partial` | `201` change request `up`; **belum ada job** sampai leader approve | A | idem |
-| B35 | Resume setelah disetujui | Lanjut dari `cursor_id`; chunk committed tidak diulang; akhirnya `success` | A | `TestIntegrationChunkedMigrationResumesFromTargetCheckpoint` |
-| B36 | Revert setelah `success` atau `partial` | `201` CR `revert`; setelah approve SQL down per chunk dari terakhir; `reverted` atau `partially_reverted` | A | `TestIntegrationChunkedMigrationRevertAfterSuccess`, `...CancelRevertsCommittedChunks` |
-| B37 | Revert dua kali, resume setelah revert, atau cancel setelah batch `success` | Dua yang pertama `409`; cancel setelah sukses membuat CR `revert` | A | handler `CancelBatchMigration` |
+| E01 | Cancel saat running | S4 batch `1000`, klik **Hentikan batch** | `202`, berhenti di batas chunk, `partial` | A |
+| E02 | Cancel dua kali | klik dua kali | Tetap `202`, idempoten | M |
+| E03 | Cancel saat queued | klik sebelum worker mulai | `409` (belum ada checkpoint) | A |
+| E04 | Cancel migration biasa | batch size `0` | `400` field `batch_size` | A |
+| E05 | Resume saat bukan partial | migration `success` | `409` | A |
+| E06 | Resume saat partial | S4 lalu cancel, klik **Ajukan lanjutkan** | `201` CR `up`, belum ada job | A |
+| E07 | Resume ganda | klik dua kali sebelum approve | `409` | A |
+| E08 | Resume setelah approve | approve CR resume | Lanjut dari cursor, chunk lama tidak diulang | A |
+| E09 | Revert setelah success | S2 selesai, klik **Ajukan revert batch** | `201` CR `revert`; setelah approve `reverted` | A |
+| E10 | Revert setelah partial | cancel lalu revert | `reverted` (semua) atau `partially_reverted` | A |
+| E11 | Revert dua kali | klik dua kali | `409` | A |
+| E12 | Resume setelah revert | revert penuh lalu resume | `409` | A |
+| E13 | Cancel setelah success | klik Hentikan setelah sukses | `201` CR `revert` | A |
+| E14 | Viewer cancel/revert | login akses view | `403` | A |
+| E15 | Data setelah revert | S2 lalu revert | `processed` kembali `false`, versi dilepas | M |
 
 ## F. Konkurensi dan lock
 
-| ID | Aksi | Harapan | Jenis | Bukti |
+| ID | Skenario | Input | Harapan | Jenis |
 |---|---|---|---|---|
-| B38 | Dua batch, atau batch + migration biasa, di database yang sama | Job kedua menunggu; span waktu tidak tumpang tindih | A | `TestIntegrationOneMigrationPerDatabaseAndParallelAcrossDatabases` |
-| B39 | Batch di dua database berbeda | Berjalan paralel | A | idem |
-| B40 | Bulk approve dua pengajuan batch | Dua job antre, dieksekusi berurutan | A | `TestIntegrationBulkApproveChangeRequests` |
-| B41 | Worker crash saat memegang lock | Advisory lock lepas bersama sesi; job lain lanjut | A | `TestIntegrationLockIsExclusiveAcrossProcessesAndReleasedOnCrash` |
-| B42 | Dua koneksi ke database fisik yang sama | Ditolak `409` saat membuat koneksi (lock per koneksi) | A | `TestIntegrationDuplicateTargetDatabase` |
+| F01 | Dua batch database sama | dua job batch | Job kedua menunggu, tidak tumpang tindih | A |
+| F02 | Batch di dua database | dua koneksi berbeda | Berjalan paralel | A |
+| F03 | Batch + migration biasa | satu DB | Serial | A |
+| F04 | Bulk approve dua batch | `POST /change-requests/approve` dua id | Dua job antre berurutan | A |
+| F05 | Dua koneksi database fisik sama | POST koneksi target sama | `409` "already registered" | A |
 
 ## G. Observability dan audit
 
-| ID | Aksi | Harapan | Jenis | Bukti |
+| ID | Skenario | Input | Harapan | Jenis |
 |---|---|---|---|---|
-| B43 | Scrape `/metrics` setelah satu batch | `migration_batch_total{status="success"}`, `migration_batch_items_total` = jumlah chunk, `migration_item_duration_seconds_count` = jumlah chunk | M | `curl :9101/metrics` |
-| B44 | Riwayat eksekusi dan audit log | Satu attempt per run (gagal/timeout tetap tercatat, append-only); submit/approve/reject tercatat di audit | A/M | `migration_executions`, `GET /admin/audit` |
-| B45 | Checkpoint di target | `_dbmp.batch_runs`: `cursor_id`, `committed_rows`, `committed_chunks`; `_dbmp.batch_chunks`: `from_id`, `to_id`, `rows`, `down_sql` | A | `TestIntegrationChunkedMigrationCheckpointsAndCommits` |
+| G01 | Metrik batch | `curl :9101/metrics` setelah S2 | `migration_batch_total{status="success"}` naik | M |
+| G02 | Metrik item = chunk | S2 100k/5000 | `migration_batch_items_total{status="success"}` = 20 | M |
+| G03 | Waktu tunggu queue | jalankan setelah backend restart | `migration_queue_wait_seconds_count` bertambah | M |
+| G04 | Job per status | `migration_jobs{status=...}` | `success` bertambah, `queued/running` kembali 0 | M |
+| G05 | Audit approve | `GET /admin/audit` | Ada entri `POST .../approve` status 200 | M |
 
 ## H. UI
 
-| ID | Aksi | Harapan | Jenis | Bukti |
+| ID | Skenario | Input | Harapan | Jenis |
 |---|---|---|---|---|
-| B46 | Migration `batch_size = 0` | Panel batch tidak muncul | M | `MigrationDetail` |
-| B47 | Batch berjalan, lalu cancel diminta | Panel menampilkan row/chunk/cursor dan tombol **Hentikan batch**; setelah cancel diminta tombol hilang dan muncul keterangan berhenti di batas potongan | M | `MigrationDetail` |
-| B48 | Batch `partial` atau `success` | Muncul **Ajukan lanjutkan dari checkpoint** (partial) dan **Ajukan revert batch** (partial/success) | M | `MigrationDetail` |
+| H01 | Penanda batch di daftar | migration batch size `5000` | Badge **Batch 5.000** di kolom nama | M |
+| H02 | Panel batch | buka detail migration batch | Panel "Batch per potongan row": rows, chunk, cursor | M |
+| H03 | Tombol Hentikan | batch `running` | Tombol muncul; hilang setelah cancel diminta | M |
+| H04 | Tombol resume/revert | status `partial` / `success` | Resume hanya `partial`; revert pada `partial` dan `success` | M |
+| H05 | Peringatan SQL | batch size > 0 tanpa `:last_id` | Peringatan muncul sebelum submit | M |
 
-## Celah dan batasan yang ditemukan
-
-Ini bukan bug yang disembunyikan — sengaja dicatat supaya tidak dilaporkan sebagai kejutan saat demo:
+## Celah dan batasan yang diketahui
 
 | # | Perilaku sekarang | Dampak | Kandidat perbaikan |
 |---|---|---|---|
-| 1 | `id <= 0` tidak pernah diproses (cursor mulai 0, `WHERE id > :last_id`) | Data dengan id 0/negatif terlewat | dokumentasikan "id harus positif", atau cursor awal `MIN(id)-1` |
-| 2 | Cancel saat job masih `queued` → `409` | Belum bisa membatalkan batch sebelum worker mulai | endpoint cancel job queue, atau perlakukan `queued` sebagai revert |
-| 3 | `RETURNING kolom_lain` / tabel tanpa kolom `id` | Job gagal saat chunk pertama (`partial`) | validasi awal dengan `EXPLAIN`/cek kolom |
-| 4 | Batch `DELETE` diizinkan | Revert hanya bisa mengembalikan cakupan id bila SQL down dirancang khusus; data bisa hilang | pesan peringatan di editor |
-| 5 | Bulk approve lintas database | UI memanggil per database, jadi bukan satu request atomik | dokumentasi (tidak melanggar spek) |
+| 1 | `id <= 0` tidak pernah diproses (cursor mulai 0) | Data id 0/negatif terlewat | Dokumentasikan "id harus positif", atau cursor awal `MIN(id)-1` |
+| 2 | Cancel saat job `queued` → `409` | Belum bisa membatalkan sebelum worker mulai | Cancel job queue |
+| 3 | `RETURNING` non-bigint / tabel tanpa `id` | Gagal saat chunk pertama (`partial`) | Validasi awal saat submit |
+| 4 | Batch `DELETE` diizinkan | Revert bergantung SQL down yang dirancang khusus | Peringatan di editor |
+| 5 | Revert penuh **tidak** melepas slot aktif | Migration sebelumnya tetap tidak bisa di-rollback (`409`) | Anggap revert penuh sebagai pembatalan di `ActiveExecutions` |
 
-## Cara menjalankan
+## Menjalankan
 
 ```bash
-# otomatis (butuh PostgreSQL untuk test)
+# otomatis
 cd server && TEST_PG_DSN="host=localhost port=5432 user=postgres password=postgres dbname=web_backend_test sslmode=disable" \
-  go test -p 1 ./internal/engine ./internal/database_handler ./internal/targetdb -count=1
+  go test -p 1 ./internal/engine ./internal/database_handler ./internal/targetdb
 
-# skenario besar lewat API
+# manual cepat lewat API
 DB_ID=<uuid> TARGET_DB=<db> ROWS=50000 CHUNK=5000 bash scripts/chunked-batch.sh
 
-# baseline vs potongan 1 juta row
+# dataset 1 juta row (baseline > 1 detik)
 ROWS=1000000 CHUNK=10000 bash scripts/dataset-batch.sh
 ```
-
-`-p 1` wajib: paket-paket itu memakai database test yang sama dan saling menghapus tabel bila berjalan paralel.
