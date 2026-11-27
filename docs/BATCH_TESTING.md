@@ -29,14 +29,15 @@ WHERE id >= :from_id AND id <= :to_id;
 
 ## 2. Uji end-to-end lewat API
 
-Prasyarat: backend/frontend jalan, database target punya akses `edit`, dan admin adalah Team Leader semua group yang punya akses (atau gunakan akun leader).
+Prasyarat: backend/frontend jalan, database target punya akses `edit`, dan akun yang dipakai script adalah Team Leader dari **setiap** group yang punya akses (kalau ada satu group tanpa leader, pengajuan ditolak `409`).
 
 ```bash
+ADMIN_USERNAME=<akun-leader> ADMIN_PASSWORD=<password> \
 DB_ID=<uuid-koneksi> TARGET_DB=<nama-db-target> ROWS=50000 CHUNK=5000 \
   bash scripts/chunked-batch.sh
 ```
 
-Script membuat tabel `batch_bench`, migration batch, change request, approve sebagai admin, lalu menunggu worker. Output yang diharapkan:
+Script membuat tabel `batch_bench`, migration batch, change request, approve sebagai akun itu, lalu menunggu worker. Tabel dibuat sebagai user `postgres` karena worker migration memakai role koneksi target; script memindahkan ownership ke `PG_USER` (default `duren`) supaya chunk tidak kena `permission denied`. Kalau ada migration lain berstatus `partial` di database yang sama, queue sengaja menahan job baru: script berhenti dengan timeout dan menyebutkan penyebabnya. Output yang diharapkan:
 
 ```
 status=success batch=success rows=50000 chunks=10
@@ -97,5 +98,33 @@ Setiap migration tetap tercatat di `migration_executions` dan `migration_jobs`. 
 
 - Checkpoint disimpan di database target, bukan database platform. Ini dipilih agar checkpoint dan potongan data berada dalam satu transaction.
 - Satu batch run aktif per migration; resume memakai `batch_run_id` yang sama.
-- Cancel setelah batch sukses penuh belum ada endpoint khusus.
-- Worker masih satu proses per replika; jangan scale backend lebih dari satu replika tanpa memindahkan lock.
+- Satu database fisik hanya boleh punya **satu koneksi** (unique `host+port+db_name`), karena lock "satu migration per database" di-key per koneksi. Mendaftarkan target yang sama dua kali dijawab `409`.
+- Cancel hanya menghentikan worker di batas potongan; membalik chunk yang sudah committed tetap butuh `change request revert` terpisah.
+- Lock memakai advisory lock di database platform dan worker mengambil job lewat queue, jadi beberapa replika backend berbagi lock yang sama. Yang harus sama adalah database platform dan `WORKER_COUNT` yang wajar.
+
+## 8. Checklist uji
+
+Jalankan otomatis (butuh PostgreSQL untuk test):
+
+```bash
+cd server && TEST_PG_DSN="host=localhost port=5432 user=postgres password=postgres dbname=web_backend_test sslmode=disable" \
+  go test -p 1 ./internal/engine ./internal/database_handler ./internal/targetdb -count=1
+```
+
+`-p 1` penting: paket-paket ini memakai database test yang sama dan akan saling menghapus tabel bila jalan paralel.
+
+| # | Skenario | Cara | Harapan | Bukti |
+|---|---|---|---|---|
+| 1 | Kontrak SQL batch divalidasi | Buat migration `batch_size>0` tanpa `:last_id`/`ORDER BY id` | `400` pada field `sql`; tidak bisa diajukan | `TestValidateDefinition` |
+| 2 | Batch tidak boleh irreversible | `batch_size>0` + `irreversible=true` | `400` | `TestValidateDefinition` |
+| 3 | Approval wajib sebelum eksekusi | Ajukan, lalu setujui oleh sebagian leader | Belum ada job, `job_id` kosong, migration tetap `pending_review`/`approved` | `TestIntegrationChangeRequestApprovalFlow`, `TestIntegrationBatchResumeRequiresApproval` |
+| 4 | Eksekusi chunked sukses | `chunked-batch.sh` (50k/5k) | `status=success batch=success rows=50000 chunks=10 row_salah=0` | `TestIntegrationChunkedMigrationCheckpointsAndCommits` |
+| 5 | Checkpoint di database target | Query `_dbmp.batch_runs` / `_dbmp.batch_chunks` | `committed_rows` = row diproses, `cursor_id` = `max(to_id)`, jumlah chunk konsisten | test #4 + §4 dokumen ini |
+| 6 | Berhenti di batas potongan | `POST /batch/cancel` saat running | migration `partial`, batch `partial`, row hanya yang sudah committed | `TestIntegrationChunkedMigrationCancelRevertsCommittedChunks` |
+| 7 | Resume dari checkpoint | `POST /batch/resume` lalu approve | Membuat change request `up`; setelah approve lanjut dari cursor, chunk lama tidak diulang | `TestIntegrationChunkedMigrationResumesFromTargetCheckpoint`, `TestIntegrationBatchResumeRequiresApproval` |
+| 8 | Revert batch | `POST /batch/revert` lalu approve | SQL down per chunk dari terakhir; `reverted` (semua) atau `partially_reverted` | `TestIntegrationChunkedMigrationRevertAfterSuccess`, `TestIntegrationChunkedMigrationCancelRevertsCommittedChunks` |
+| 9 | Satu migration per database | 3 job di DB A + 1 job di DB B | Span waktu A tidak tumpang tindih; B beririsan dengan A | `TestIntegrationOneMigrationPerDatabaseAndParallelAcrossDatabases` |
+| 10 | Lock lepas saat worker mati | Hentikan worker di tengah job | Advisory lock lepas bersama sesi; job diambil worker lain | `TestIntegrationLockIsExclusiveAcrossProcessesAndReleasedOnCrash` |
+| 11 | Satu database fisik satu koneksi | `POST /admin/connections` dua kali dengan host/port/db sama | `409` "this target database is already registered" | `TestIntegrationDuplicateTargetDatabase` |
+| 12 | Baseline > 1 detik | `ROWS=1000000 CHUNK=10000 bash scripts/dataset-batch.sh` | Durasi baseline > 1 detik pada dataset yang sama | §3 dokumen ini |
+| 13 | Metrik batch terisi | Scrape `/metrics` setelah satu batch | `migration_batch_total{status="success"}`, `migration_item_duration_seconds`, `migration_batch_duration_seconds` naik | manual, lihat §6 |

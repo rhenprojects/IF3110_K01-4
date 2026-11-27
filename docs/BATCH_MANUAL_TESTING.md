@@ -38,14 +38,27 @@ INSERT INTO big_table (id) SELECT g FROM generate_series(1, 50000) g;"
    SELECT status, cursor_id, committed_rows, committed_chunks FROM _dbmp.batch_runs;
    SELECT chunk_no, from_id, to_id, rows FROM _dbmp.batch_chunks ORDER BY chunk_no;
    ```
-   Harapan: 50.000 row `processed`, 5 chunk, `committed_rows=50000`.
+   Harapan: 50.000 row `processed`, **10 chunk** (50.000 / 5.000), `committed_rows=50000`, `cursor_id=50000`.
 
 ## Cancel dan resume
 
 - Saat batch berjalan, klik **Hentikan batch**. Worker berhenti di batas potongan; migration menjadi `partial`.
 - Untuk membatalkan committed chunk, klik **Ajukan revert batch**. Ini membuat change request `revert`; setelah leader menyetujui, worker menjalankan SQL down dari chunk terakhir. Statusnya `reverted`/`partially_reverted`.
-- Setelah berhenti, klik **Lanjutkan dari checkpoint**. Worker melanjutkan dari cursor terakhir.
+- Setelah berhenti, klik **Ajukan lanjutkan dari checkpoint**. Itu membuat change request `up` (migration tetap `partial` selama review); worker baru melanjutkan dari cursor terakhir setelah semua leader menyetujui, dan chunk yang sudah committed tidak diulang.
 - Setelah batch sukses, **Ajukan revert batch** juga memakai approval + queue.
+
+## Uji penolakan (harus gagal dengan rapi)
+
+| Skenario | Harapan |
+|---|---|
+| SQL up tanpa `:last_id`/`:batch_size`/`ORDER BY id` pada migration `batch_size>0` | `400`, field `sql`, draft tidak bisa diajukan |
+| `batch_size>0` ditandai `irreversible` | `400`; cancel butuh SQL down |
+| Approve oleh user yang bukan leader | `403` |
+| `POST /batch/resume` saat migration bukan `partial` | `409` |
+| Resume ganda saat change request masih berjalan | `409` |
+| `POST /batch/revert` saat belum pernah jalan | `409` |
+| Dua koneksi ke host+port+database yang sama | `409` "this target database is already registered" |
+| Migration lain berstatus `partial` di database yang sama | Job baru ditahan queue sampai di-resume/revert |
 
 ## Dataset besar
 
