@@ -80,14 +80,14 @@ FROM _dbmp.batch_chunks ORDER BY run_id, chunk_no;
 curl -b cookies.txt -H "X-CSRF-Token: $CSRF" -X POST \
   "$BASE_URL/databases/$DB_ID/migrations/$MID/batch/cancel"
 
-# lanjutkan dari checkpoint
+# ajukan lanjutan dari checkpoint (change request; perlu approval leader)
 curl -b cookies.txt -H "X-CSRF-Token: $CSRF" -X POST \
   "$BASE_URL/databases/$DB_ID/migrations/$MID/batch/resume"
 ```
 
 - **Stop batch yang sedang berjalan**: `POST /batch/cancel` hanya meminta worker berhenti di batas potongan. Tidak ada SQL down otomatis; migration menjadi `partial`.
 - **Revert**: `POST /batch/revert` membuat **change request kind `revert`**. Setelah semua leader menyetujui, worker queue menjalankan SQL down per chunk dari yang terakhir. Hasil `batch_status=reverted` (semua) atau `partially_reverted` (sebagian); migration tetap `partial`.
-- **Resume**: worker membaca `_dbmp.batch_runs.cursor_id` dan melanjutkan; tidak mengulang chunk yang sudah committed.
+- **Resume**: `POST /batch/resume` membuat **change request kind `up`** untuk migration `partial`; migration tetap `partial` selama review. Setelah semua leader menyetujui, worker membaca `_dbmp.batch_runs.cursor_id` dan melanjutkan; tidak mengulang chunk yang sudah committed.
 
 ## 6. Observability
 

@@ -454,7 +454,7 @@ Izin:
 | `POST /databases/:id/migrations` | Buat draft. Body `{ "name": "…", "sql": "…", "sql_down": "…", "batch_size": 0 }`. Response `201` + `Migration` berstatus `draft` |
 | `PUT /databases/:id/migrations/:mid` | Ubah draft. Body sama seperti `POST`. Response `200`. `409` kalau statusnya bukan `draft` |
 | `POST /databases/:id/migrations/:mid/batch/cancel` | Jika batch sedang berjalan, minta worker berhenti di batas potongan (`202`). Jika sudah `success`/`partial`, membuat change request `revert` (`201`). `400` kalau bukan batch |
-| `POST /databases/:id/migrations/:mid/batch/resume` | Lanjutkan batch dari checkpoint terakhir dan masukkan job baru ke queue. Response `202` + job; `409` kalau tidak ada checkpoint |
+| `POST /databases/:id/migrations/:mid/batch/resume` | Ajukan lanjutan batch `partial` dari checkpoint terakhir sebagai change request `up`. Migration tetap `partial` selama review; job baru masuk queue setelah semua leader menyetujui. Response `201` + ChangeRequest; `409` kalau tidak ada checkpoint atau sudah ada pengajuan yang berjalan |
 | `POST /databases/:id/migrations/:mid/batch/revert` | Buat change request `revert` untuk batch sukses/partial. Setelah leader menyetujui, worker queue menjalankan SQL down dari chunk terakhir. Response `201` + ChangeRequest |
 
 Aturan input `POST` dan `PUT`: `name` wajib, maksimal 200 karakter. `sql` wajib, tidak boleh kosong. `sql_down` wajib kecuali `irreversible=true`. `batch_size` 0–1.000.000.
@@ -471,7 +471,7 @@ Migration dengan `batch_size > 0` dieksekusi per potongan row oleh worker queue,
 - `batch_size > 0` tidak boleh `irreversible` karena cancel membutuhkan `sql_down`.
 - Approval dan queue tetap wajib: migration diajukan lewat change request, disetujui leader, lalu worker menjalankannya.
 - Cancel: berhenti di batas potongan, lalu SQL down dijalankan untuk chunk committed dari yang terakhir; status `batch_status` menjadi `reverted` atau `partially_reverted`, migration menjadi `partial`.
-- Resume: job baru membaca checkpoint target dan melanjutkan dari cursor terakhir.
+- Resume: diajukan lewat change request dan perlu approval semua leader seperti eksekusi lain. Setelah disetujui, job baru membaca checkpoint target dan melanjutkan dari cursor terakhir.
 - Endpoint `/batches` lama (banyak migration) mengembalikan `410 Gone`; gunakan `batch_size` pada migration.
 
 ### Review dan approval (change request)
