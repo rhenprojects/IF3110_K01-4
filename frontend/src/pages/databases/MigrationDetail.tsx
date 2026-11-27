@@ -1,15 +1,16 @@
 import { useEffect, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   useCancelBatchMigration, useChangeRequests, useDispatchChangeRequest, useJob, useJobs, useMigration, useMigrationExecutions,
   useResumeBatchMigration, useRevertBatchMigration, useSubmitChangeRequest,
 } from "../../features/databases/hooks";
-import { Badge, Button, ConfirmDialog, ErrorBox, Loading, Table, generalError, td } from "../../components/ui";
+import { DataList, type Column } from "../../components/DataList";
+import { Badge, Button, ConfirmDialog, ErrorBox, Loading, generalError } from "../../components/ui";
 import { useToast } from "../../components/toast";
 import { fmtDate, fmtDuration, isDestructive } from "../../lib/format";
 import type { ChangeRequest, JobKind, MigrationExecution, MigrationJob } from "../../lib/types";
-import { JobStatusBadge, KIND_LABEL, StateError, StatusBadge, canEdit, useDb } from "./shared";
+import { BackLink, JobStatusBadge, KIND_LABEL, StateError, StatusBadge, canEdit, useDb } from "./shared";
 
 //[queue] status job terbaru migration ini; dipolling sampai success/failed
 function JobPanel({ job }: { job: MigrationJob }) {
@@ -21,7 +22,7 @@ function JobPanel({ job }: { job: MigrationJob }) {
     failed: "Job gagal. Seluruh perubahan di-rollback.",
   };
   return (
-    <div role="status" aria-live="polite" className="flex flex-wrap items-center gap-3 rounded border bg-slate-50 p-3 text-sm">
+    <div role="status" aria-live="polite" className="flex flex-wrap items-center gap-3 rounded-2xl border bg-white p-4 text-sm shadow-sm">
       <span className="font-medium">Job {KIND_LABEL[job.kind]}</span>
       <JobStatusBadge status={job.status} />
       <span className="text-slate-600">{text[job.status]}</span>
@@ -41,46 +42,62 @@ function ReviewPanel({ cr, onDispatch, dispatching }: { cr: ChangeRequest; onDis
     approve: { tone: "green", label: "Setuju" },
     reject: { tone: "red", label: "Tolak" },
   } as const;
+  const columns: Column<ChangeRequest["reviewers"][number]>[] = [
+    { header: "Group", role: "title", cell: (r) => r.group_name ?? null },
+    { header: "Team Leader", cell: (r) => r.leader_name },
+    { header: "Keputusan", role: "status", cell: (r) => <Badge tone={decision[r.decision].tone}>{decision[r.decision].label}</Badge> },
+    { header: "Komentar", wide: true, cell: (r) => r.comment || null },
+  ];
   return (
-    <section className="space-y-3 rounded border p-3">
+    <section className="space-y-3 rounded-2xl border bg-white p-4 shadow-sm">
       <div className="flex flex-wrap items-center gap-3 text-sm">
-        <h3 className="font-medium">Review {KIND_LABEL[cr.kind]}</h3>
+        <h3 className="font-serif text-base font-semibold">Review {KIND_LABEL[cr.kind]}</h3>
         <Badge tone={status[cr.status].tone}>{status[cr.status].label}</Badge>
         <span className="text-slate-500">diajukan {cr.requested_by_name} · {fmtDate(cr.created_at)}</span>
         {onDispatch && <Button onClick={onDispatch} disabled={dispatching}>Masukkan ke queue</Button>}
       </div>
       {onDispatch && <p className="text-sm text-slate-600">Sudah disetujui semua, tetapi belum masuk queue. Coba masukkan ke queue lagi.</p>}
-      <Table columns={["Group", "Team Leader", "Keputusan", "Komentar"]}>
-        {cr.reviewers.map((r, i) => (
-          <tr key={i} className="align-top">
-            <td className={td}>{r.group_name ?? "—"}</td>
-            <td className={td}>{r.leader_name ?? "—"}</td>
-            <td className={td}><Badge tone={decision[r.decision].tone}>{decision[r.decision].label}</Badge></td>
-            <td className={td}>{r.comment || "—"}</td>
-          </tr>
-        ))}
-      </Table>
+      <DataList label="Persetujuan review" rows={cr.reviewers} columns={columns} rowKey={(r) => r.group_id ?? r.leader_id ?? ""} />
     </section>
+  );
+}
+
+//[stepper] posisi migration di alur Draft → Review → Queue → Selesai/Gagal
+const STEPS = ["Draft", "Review", "Queue", "Selesai"];
+function Stepper({ step, failed }: { step: number; failed: boolean }) {
+  return (
+    <ol aria-label="Alur migration" className="flex items-center text-sm">
+      {STEPS.map((label, i) => {
+        const last = i === STEPS.length - 1;
+        const bad = failed && last;
+        const done = i < step || (last && i === step && !failed);
+        const tone = bad ? "bg-danger text-white" : done ? "bg-primary text-white" : i === step ? "bg-primary-soft text-primary ring-2 ring-primary" : "bg-slate-100 text-slate-500";
+        return (
+          <li key={label} aria-current={i === step ? "step" : undefined} className={`flex items-center ${last ? "" : "flex-1"}`}>
+            <span className={`grid size-7 shrink-0 place-items-center rounded-full text-xs font-semibold ${tone}`}>{done ? "✓" : bad ? "!" : i + 1}</span>
+            <span className={`ml-2 whitespace-nowrap ${i === step ? "font-medium" : "text-slate-500"}`}>{bad ? "Gagal" : label}</span>
+            {!last && <span aria-hidden className={`mx-3 h-px flex-1 ${i < step ? "bg-primary" : "bg-slate-200"}`} />}
+          </li>
+        );
+      })}
+    </ol>
   );
 }
 
 function ExecutionHistory({ items }: { items: MigrationExecution[] }) {
   if (items.length === 0) return null;
+  const columns: Column<MigrationExecution>[] = [
+    { header: "#", cell: (x) => <span className="font-mono">{x.attempt}</span> },
+    { header: "Jenis", role: "title", cell: (x) => <>{KIND_LABEL[x.kind]}{x.recovered && <span className="ml-1 text-xs font-normal text-slate-500">(dipulihkan)</span>}</> },
+    { header: "Status", role: "status", cell: (x) => <JobStatusBadge status={x.status} /> },
+    { header: "Waktu", nowrap: true, cell: (x) => fmtDate(x.started_at) },
+    { header: "Durasi", cell: (x) => fmtDuration(x.duration_ms) },
+    { header: "Error", wide: true, cell: (x) => x.error ? <span className="break-words font-mono text-xs text-danger">{x.sqlstate && `[${x.sqlstate}] `}{x.error}</span> : null },
+  ];
   return (
     <section>
-      <h3 className="mb-2 text-sm font-medium">Riwayat attempt</h3>
-      <Table columns={["#", "Jenis", "Status", "Waktu", "Durasi", "Error"]}>
-        {items.map((x) => (
-          <tr key={x.id} className="align-top">
-            <td className={`${td} font-mono`}>{x.attempt}</td>
-            <td className={td}>{KIND_LABEL[x.kind]}{x.recovered && <span className="ml-1 text-xs text-slate-500">(dipulihkan)</span>}</td>
-            <td className={td}><JobStatusBadge status={x.status} /></td>
-            <td className={`${td} whitespace-nowrap`}>{fmtDate(x.started_at)}</td>
-            <td className={td}>{fmtDuration(x.duration_ms)}</td>
-            <td className={`${td} font-mono text-xs text-red-700`}>{x.sqlstate && `[${x.sqlstate}] `}{x.error}</td>
-          </tr>
-        ))}
-      </Table>
+      <h3 className="mb-2 font-serif text-base font-semibold">Riwayat attempt</h3>
+      <DataList label="Riwayat attempt" rows={items} columns={columns} rowKey={(x) => String(x.id)} />
     </section>
   );
 }
@@ -118,7 +135,9 @@ export default function MigrationDetail() {
   const m = q.data;
   const editable = canEdit(db.level);
   const waiting = cr?.status === "pending_review" || (cr?.status === "approved" && !cr.job_id);
-  const busy = waiting || (!!job && (job.status === "queued" || job.status === "running" || job.status === "uncertain"));
+  const jobBusy = !!job && (job.status === "queued" || job.status === "running" || job.status === "uncertain");
+  const busy = waiting || jobBusy;
+  const step = jobBusy ? 2 : waiting ? 1 : { draft: 0, pending_review: 1, approved: 2, success: 3, failed: 3 }[m.status];
   //[rollback] rollback sukses tidak mengubah baris migration, jadi keadaan "dibatalkan" dibaca dari riwayat eksekusi
   const lastOk = [...(history.data ?? [])].sort((a, z) => z.id - a.id).find((x) => x.status === "success");
   const rolledBack = m.status === "success" && lastOk?.kind === "rollback";
@@ -145,22 +164,31 @@ export default function MigrationDetail() {
 
   return (
     <div className="space-y-5">
-      <Link to={`/databases/${db.id}/migrations`} className="text-sm text-slate-500 hover:underline">← Riwayat migration</Link>
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 break-words text-lg font-semibold">
-          {m.version && <span className="font-mono text-slate-400">v{m.version}</span>}{m.name} <StatusBadge status={m.status} />
-        </h2>
-        {editable && !busy && (
-          <div className="flex flex-wrap gap-2">
-            {m.status === "draft" && <Button onClick={() => nav(`/databases/${db.id}/migrations/${m.id}/edit`)}>Edit</Button>}
-            {m.status === "draft" && <Button variant="primary" onClick={() => setConfirm("up")}>Ajukan review</Button>}
-            {canRollback && <Button onClick={() => setConfirm("rollback")}>Rollback</Button>}
-            {canForward && <Button variant="primary" onClick={() => setConfirm("forward")}>Forward</Button>}
-            {m.status === "failed" && (
-              <Button onClick={() => nav(`/databases/${db.id}/migrations/new`, { state: { name: m.name, sql: m.sql } })}>Salin ke migration baru</Button>
-            )}
-          </div>
-        )}
+      <BackLink to={`/databases/${db.id}/migrations`}>Riwayat migration</BackLink>
+      <div className={`space-y-5 rounded-2xl border border-t-4 bg-white p-6 shadow-sm ${
+        m.status === "failed" ? "border-t-danger" : m.status === "success" && !busy ? "border-t-ok" : busy ? "border-t-warn" : "border-t-primary"}`}>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 break-words text-xl font-semibold">
+            {m.version && <span className="font-mono text-base font-normal text-slate-500">v{m.version}</span>}{m.name} <StatusBadge status={m.status} />
+          </h2>
+          {editable && !busy && (
+            <div className="flex flex-wrap gap-2">
+              {m.status === "draft" && <Button onClick={() => nav(`/databases/${db.id}/migrations/${m.id}/edit`)}>Edit</Button>}
+              {m.status === "draft" && <Button variant="primary" onClick={() => setConfirm("up")}>Ajukan review</Button>}
+              {canRollback && <Button onClick={() => setConfirm("rollback")}>Rollback</Button>}
+              {canForward && <Button variant="primary" onClick={() => setConfirm("forward")}>Forward</Button>}
+              {m.status === "failed" && (
+                <Button onClick={() => nav(`/databases/${db.id}/migrations/new`, { state: { name: m.name, sql: m.sql } })}>Salin ke migration baru</Button>
+              )}
+            </div>
+          )}
+        </div>
+        <Stepper step={step} failed={m.status === "failed" && !busy} />
+        <dl className="grid gap-3 border-t pt-4 text-sm sm:grid-cols-3">
+          {meta.map(([k, v]) => (
+            <div key={k}><dt className="text-xs uppercase tracking-wide text-slate-500">{k}</dt><dd className="mt-0.5">{v}</dd></div>
+          ))}
+        </dl>
       </div>
 
       <ErrorBox message={execMsg} />
@@ -212,28 +240,28 @@ export default function MigrationDetail() {
       </dl>
 
       {m.status === "failed" && (
-        <div role="alert" className="rounded border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+        <div role="alert" className="rounded-2xl border border-danger/20 bg-danger-soft p-5 text-sm text-danger">
           <p className="font-medium">Gagal dijalankan. Seluruh perubahan di-rollback.</p>
           <pre className="mt-2 whitespace-pre-wrap font-mono text-xs">{m.error}</pre>
           <p className="mt-2 text-xs">Jalankan ulang lewat Forward (perlu persetujuan lagi), atau salin SQL-nya ke migration baru.</p>
         </div>
       )}
       {m.status === "success" && (
-        <p className="rounded border border-green-200 bg-green-50 p-3 text-sm text-green-800">Di-commit sebagai versi {m.version}. Migration yang berhasil tidak dapat diubah.</p>
+        <p className="rounded-2xl border border-ok/20 bg-ok-soft p-4 text-sm text-ok">Di-commit sebagai versi {m.version}. Migration yang berhasil tidak dapat diubah.</p>
       )}
 
       <section>
-        <h3 className="mb-2 text-sm font-medium">SQL up</h3>
-        <pre className="max-h-96 overflow-auto rounded border bg-slate-900 p-4 text-sm text-slate-100"><code>{m.sql}</code></pre>
+        <h3 className="mb-2 font-serif text-base font-semibold">SQL up</h3>
+        <pre className="max-h-96 overflow-auto rounded-2xl border bg-slate-100 p-4 text-sm text-slate-800"><code>{m.sql}</code></pre>
       </section>
       <section>
-        <h3 className="mb-2 text-sm font-medium">SQL down (rollback)</h3>
+        <h3 className="mb-2 font-serif text-base font-semibold">SQL down (rollback)</h3>
         {m.irreversible ? (
-          <p className="rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+          <p className="rounded-2xl border border-warn/20 bg-warn-soft p-4 text-sm text-warn">
             Irreversible: {m.irreversible_reason || "alasan belum diisi"}
           </p>
         ) : m.sql_down ? (
-          <pre className="max-h-96 overflow-auto rounded border bg-slate-900 p-4 text-sm text-slate-100"><code>{m.sql_down}</code></pre>
+          <pre className="max-h-96 overflow-auto rounded-2xl border bg-slate-100 p-4 text-sm text-slate-800"><code>{m.sql_down}</code></pre>
         ) : (
           <p className="text-sm text-slate-500">Belum diisi. Isi SQL down atau tandai irreversible sebelum menjalankan migration.</p>
         )}

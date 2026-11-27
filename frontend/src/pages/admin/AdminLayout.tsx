@@ -1,17 +1,17 @@
 import { NavLink, Outlet } from "react-router-dom";
-
-const tab = ({ isActive }: { isActive: boolean }) =>
-  `shrink-0 whitespace-nowrap border-b-2 px-4 py-2 text-sm ${isActive ? "border-slate-900 font-medium" : "border-transparent text-slate-500 hover:text-slate-900"}`;
+import { Banner, bannerTab } from "../../components/Banner";
+import { ShieldIcon } from "../../components/icons";
 
 export default function AdminLayout() {
   return (
     <div>
-      <h1 className="mb-4 text-xl font-semibold">Platform Admin</h1>
-      <nav className="mb-6 flex overflow-x-auto border-b">
-        <NavLink to="users" className={tab}>Users</NavLink>
-        <NavLink to="groups" className={tab}>Groups</NavLink>
-        <NavLink to="connections" className={tab}>Koneksi Database</NavLink>
-      </nav>
+      <Banner title="Platform Admin" icon={<ShieldIcon />} caption="Kelola pengguna, group beserta Team Leader-nya, dan koneksi ke database target.">
+        <nav className="flex gap-1 overflow-x-auto">
+          <NavLink to="users" className={bannerTab}>Users</NavLink>
+          <NavLink to="groups" className={bannerTab}>Groups</NavLink>
+          <NavLink to="connections" className={bannerTab}>Koneksi Database</NavLink>
+        </nav>
+      </Banner>
       <Outlet />
     </div>
   );

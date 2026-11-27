@@ -3,6 +3,7 @@ import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../features/auth/auth";
 import { ApiError } from "../lib/api";
 import { errorMessage } from "../lib/errors";
+import { Button, ErrorBox, Field, inputCls } from "../components/ui";
 
 export default function Login() {
   const { user, login, sessionExpired } = useAuth();
@@ -35,28 +36,36 @@ export default function Login() {
 
   return (
     <div className="grid min-h-screen place-items-center bg-slate-50 p-4">
-      <form onSubmit={submit} className="w-full max-w-sm space-y-4 rounded-lg border bg-white p-6 shadow-sm">
-        <h1 className="text-lg font-semibold">Masuk</h1>
-        <label className="block text-sm">
-          Username
-          <input className="mt-1 w-full rounded border px-3 py-2" value={username}
-            onChange={(e) => setUsername(e.target.value)} autoComplete="username" required />
-        </label>
-        <label className="block text-sm">
-          Password
-          <input type="password" className="mt-1 w-full rounded border px-3 py-2" value={password}
-            onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" required />
-        </label>
-        {sessionExpired && !error && (
-          <p role="status" className="rounded bg-amber-50 px-3 py-2 text-sm text-amber-800">
-            Sesi kamu telah berakhir. Silakan masuk lagi.
-          </p>
-        )}
-        {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
-        <button disabled={busy} className="w-full rounded bg-slate-900 py-2 text-white disabled:opacity-50">
-          {busy ? "Masuk…" : "Masuk"}
-        </button>
-      </form>
+      <div className="grid w-full max-w-4xl overflow-hidden rounded-3xl border bg-white shadow-xl md:min-h-[34rem] md:grid-cols-2">
+        <div className="relative hidden overflow-hidden bg-primary md:block">
+          <video src="/login-migra.mp4" autoPlay muted loop playsInline aria-hidden className="absolute inset-0 size-full object-cover" />
+          <div className="absolute inset-0 bg-gradient-to-t from-primary/90 via-primary/40 to-primary/10" />
+          <div className="relative flex h-full flex-col justify-end p-8 text-white">
+            <p className="font-serif text-3xl font-semibold leading-snug">Ubah struktur database dengan tenang.</p>
+            <p className="mt-3 text-sm text-white/85">Kelola migration database dengan review dan jejak yang jelas.</p>
+          </div>
+        </div>
+        <form onSubmit={submit} className="flex flex-col justify-center gap-5 p-8 sm:p-10">
+          <img src="/logo-full.png" alt="Migra" className="h-10 w-auto self-start" />
+          <div>
+            <h1 className="text-2xl font-semibold">Selamat datang kembali</h1>
+            <p className="mt-1 text-sm text-slate-500">Masuk untuk mengelola migration database kamu.</p>
+          </div>
+          <Field label="Username">
+            <input className={inputCls} value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" required />
+          </Field>
+          <Field label="Password">
+            <input type="password" className={inputCls} value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" required />
+          </Field>
+          {sessionExpired && !error && (
+            <p role="status" className="rounded-lg bg-warn-soft px-3 py-2 text-sm text-warn">
+              Sesi kamu telah berakhir. Silakan masuk lagi.
+            </p>
+          )}
+          <ErrorBox message={error} />
+          <Button type="submit" variant="primary" disabled={busy} className="w-full py-2.5">{busy ? "Masuk…" : "Masuk"}</Button>
+        </form>
+      </div>
     </div>
   );
 }

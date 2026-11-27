@@ -2,7 +2,17 @@ import { Link, useNavigate } from "react-router-dom";
 import { useMigrations } from "../../features/databases/hooks";
 import { Button, EmptyState, Loading, PageHeader, Table, td } from "../../components/ui";
 import { fmtDate, fmtDuration } from "../../lib/format";
+import type { Migration, MigrationStatus } from "../../lib/types";
 import { StateError, StatusBadge, canEdit, useDb } from "./shared";
+
+type Filter = "all" | "draft" | "review" | "success" | "failed";
+const MATCH: Record<Filter, (s: MigrationStatus) => boolean> = {
+  all: () => true,
+  draft: (s) => s === "draft",
+  review: (s) => s === "pending_review" || s === "approved",
+  success: (s) => s === "success",
+  failed: (s) => s === "failed",
+};
 
 export default function MigrationList() {
   const db = useDb();

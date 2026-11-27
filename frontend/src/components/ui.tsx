@@ -2,7 +2,9 @@ import { useEffect, useRef, type ButtonHTMLAttributes, type ReactNode } from "re
 import { ApiError } from "../lib/api";
 import { errorMessage } from "../lib/errors";
 
-export const inputCls = "mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm focus:outline-2 focus:outline-slate-900";
+export const inputCls = "mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-2 focus:outline-primary";
+
+export const selectCls = "rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-sm focus:outline-2 focus:outline-primary";
 
 //[error] pesan error field tertentu dari backend (400 + field)
 export const fieldError = (e: unknown, field: string) =>
@@ -45,10 +47,10 @@ export function Modal({ title, onClose, children }: { title: string; onClose: ()
   }, []);
 
   return (
-    <div className="fixed inset-0 z-10 grid place-items-center bg-black/40 p-4" onMouseDown={onClose}>
+    <div className="fixed inset-0 z-10 grid place-items-center bg-slate-900/40 p-4" onMouseDown={onClose}>
       <div ref={box} tabIndex={-1} role="dialog" aria-modal="true" aria-label={title} onMouseDown={(e) => e.stopPropagation()}
-        className="max-h-[90dvh] w-full max-w-lg overflow-y-auto rounded-lg bg-white p-5 shadow-xl focus:outline-none">
-        <h2 className="mb-4 text-lg font-semibold">{title}</h2>
+        className="max-h-[90dvh] w-full max-w-lg overflow-y-auto rounded-2xl bg-white p-6 shadow-xl focus:outline-none">
+        <h2 className="mb-4 text-xl font-semibold">{title}</h2>
         {children}
       </div>
     </div>
@@ -75,7 +77,7 @@ export function Field({ label, error, hint, children }: { label: string; error?:
       <span className="font-medium">{label}</span>
       {children}
       {hint && !error && <span className="mt-1 block text-xs text-slate-500">{hint}</span>}
-      {error && <span role="alert" className="mt-1 block text-xs text-red-600">{error}</span>}
+      {error && <span role="alert" className="mt-1 block text-xs text-danger">{error}</span>}
     </label>
   );
 }
@@ -83,21 +85,21 @@ export function Field({ label, error, hint, children }: { label: string; error?:
 type BtnProps = ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "primary" | "ghost" | "danger" };
 export function Button({ variant = "ghost", className = "", ...p }: BtnProps) {
   const v = {
-    primary: "bg-slate-900 text-white hover:bg-slate-700",
-    ghost: "border border-slate-300 hover:bg-slate-100",
-    danger: "border border-red-300 text-red-700 hover:bg-red-50",
+    primary: "bg-primary text-white hover:bg-primary-hover",
+    ghost: "border border-slate-300 bg-white hover:bg-slate-100",
+    danger: "border border-danger/30 bg-white text-danger hover:bg-danger-soft",
   }[variant];
-  return <button type="button" {...p} className={`rounded px-3 py-2 text-sm disabled:opacity-50 sm:py-1.5 ${v} ${className}`} />;
+  return <button type="button" {...p} className={`rounded-lg px-3.5 py-2 text-sm font-medium transition-colors disabled:opacity-50 sm:py-1.5 ${v} ${className}`} />;
 }
 
 export function ErrorBox({ message }: { message?: string }) {
-  return message ? <p role="alert" className="rounded bg-red-50 px-3 py-2 text-sm text-red-700">{message}</p> : null;
+  return message ? <p role="alert" className="rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger">{message}</p> : null;
 }
 
 export function PageHeader({ title, action }: { title: string; action?: ReactNode }) {
   return (
     <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-      <h2 className="text-lg font-semibold">{title}</h2>
+      <h2 className="text-xl font-semibold">{title}</h2>
       {action}
     </div>
   );
@@ -105,19 +107,19 @@ export function PageHeader({ title, action }: { title: string; action?: ReactNod
 
 const tones = {
   neutral: "bg-slate-100 text-slate-700",
-  dark: "bg-slate-900 text-white",
-  green: "bg-green-100 text-green-800",
-  red: "bg-red-100 text-red-800",
-  amber: "bg-amber-100 text-amber-800",
+  dark: "bg-primary text-white",
+  green: "bg-ok-soft text-ok",
+  red: "bg-danger-soft text-danger",
+  amber: "bg-warn-soft text-warn",
 };
 export function Badge({ tone = "neutral", children }: { tone?: keyof typeof tones; children: ReactNode }) {
-  return <span className={`rounded px-2 py-0.5 text-xs ${tones[tone]}`}>{children}</span>;
+  return <span className={`rounded-full px-2.5 py-0.5 font-sans text-xs font-medium ${tones[tone]}`}>{children}</span>;
 }
 
 export function EmptyState({ title, hint, action }: { title: string; hint?: string; action?: ReactNode }) {
   return (
-    <div className="rounded border border-dashed bg-white px-6 py-10 text-center">
-      <p className="font-medium">{title}</p>
+    <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-6 py-12 text-center">
+      <p className="font-serif text-lg font-semibold">{title}</p>
       {hint && <p className="mt-1 text-sm text-slate-500">{hint}</p>}
       {action && <div className="mt-4">{action}</div>}
     </div>
@@ -126,13 +128,13 @@ export function EmptyState({ title, hint, action }: { title: string; hint?: stri
 
 export const Loading = () => <p className="text-slate-500">Memuat…</p>;
 
-const th = "px-3 py-2 text-left text-xs font-medium uppercase tracking-wide text-slate-500";
+export const th = "px-3 py-2 text-left text-xs font-medium uppercase tracking-wide text-slate-500";
 export const td = "px-3 py-2 text-sm";
 
 //[table] columns = label header, pakai "" untuk kolom aksi; isi tbody lewat children
 export function Table({ columns, children }: { columns: string[]; children: ReactNode }) {
   return (
-    <div className="overflow-x-auto rounded border bg-white">
+    <div className="overflow-x-auto rounded-2xl border bg-white shadow-sm">
       <table className="w-full min-w-[40rem]">
         <thead className="bg-slate-50">
           <tr>{columns.map((c, i) => <th key={i} className={th}>{c}</th>)}</tr>

@@ -1,14 +1,14 @@
-import { Link, NavLink, Outlet, useParams } from "react-router-dom";
+import { Link, NavLink, Outlet, useLocation, useParams } from "react-router-dom";
 import { useDatabase } from "../../features/databases/hooks";
+import { Banner, bannerTab as tab } from "../../components/Banner";
+import { DatabaseIcon } from "../../components/icons";
 import { Loading } from "../../components/ui";
-import { LevelBadge, StateError } from "./shared";
-
-const tab = ({ isActive }: { isActive: boolean }) =>
-  `shrink-0 whitespace-nowrap border-b-2 px-4 py-2 text-sm ${isActive ? "border-slate-900 font-medium" : "border-transparent text-slate-500 hover:text-slate-900"}`;
+import { StateError } from "./shared";
 
 //[layout] memuat info database + level efektif; 403/404/502 ditangani di sini sekali untuk semua sub-halaman
 export default function DatabaseLayout() {
   const { dbId = "" } = useParams();
+  const { pathname } = useLocation();
   const q = useDatabase(dbId);
   if (q.isLoading) return <Loading />;
   if (q.error || !q.data) return <StateError error={q.error} onRetry={() => q.refetch()} backLink />;

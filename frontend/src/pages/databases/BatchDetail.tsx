@@ -2,19 +2,12 @@ import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useBatch, useBatchItems, useCancelBatch, useRetryBatch } from "../../features/databases/hooks";
-import { Button, ConfirmDialog, ErrorBox, Loading, Table, generalError, td } from "../../components/ui";
+import { DataList, type Column } from "../../components/DataList";
+import { Button, ConfirmDialog, ErrorBox, Loading, generalError } from "../../components/ui";
 import { useToast } from "../../components/toast";
 import { fmtDate, fmtDuration } from "../../lib/format";
-import { StateError, BatchStatusBadge, canEdit, useDb } from "./shared";
-import type { BatchItemStatus } from "../../lib/types";
-
-const ITEM: Record<BatchItemStatus, string> = {
-  pending: "Menunggu",
-  running: "Berjalan",
-  success: "Berhasil",
-  failed: "Gagal",
-  skipped: "Dilewati",
-};
+import type { BatchItem } from "../../lib/types";
+import { BackLink, BatchItemBadge, BatchStatusBadge, StateError, canEdit, useDb } from "./shared";
 
 export default function BatchDetail() {
   const db = useDb();
@@ -39,7 +32,8 @@ export default function BatchDetail() {
   if (q.error || !q.data) return <StateError error={q.error} onRetry={() => q.refetch()} />;
   const b = q.data;
   const editable = canEdit(db.level);
-  const pct = b.total > 0 ? Math.round(((b.processed + b.failed) / b.total) * 100) : 0;
+  const share = (n: number) => (b.total > 0 ? (n / b.total) * 100 : 0);
+  const pct = Math.round(share(b.processed + b.failed));
 
   async function doCancel() {
     try {
@@ -62,80 +56,91 @@ export default function BatchDetail() {
     }
   }
 
+  const columns: Column<BatchItem>[] = [
+    { header: "#", cell: (it) => <span className="font-mono text-xs">{it.id}</span> },
+    {
+      header: "Migration", role: "title",
+      cell: (it) => (
+        <>
+          <Link to={`/databases/${db.id}/migrations/${it.migration_id}`} className="text-primary underline-offset-2 hover:underline">
+            {it.migration_name ?? it.migration_id.slice(0, 8)}
+          </Link>
+          {it.compensation_status === "retained" && <span className="block text-xs font-normal text-slate-500">Perubahan dipertahankan</span>}
+        </>
+      ),
+    },
+    { header: "Percobaan", cell: (it) => it.attempt },
+    { header: "Status", role: "status", cell: (it) => <BatchItemBadge status={it.status} /> },
+    { header: "Eksekusi", cell: (it) => <span className="font-mono text-xs">{it.execution_id.slice(0, 8)}</span> },
+    { header: "Durasi", cell: (it) => fmtDuration(it.duration_ms) },
+    { header: "Error", wide: true, cell: (it) => it.error ? <span className="break-words text-xs text-danger">{it.error}</span> : null },
+  ];
+
   return (
     <div className="space-y-5">
-      <Link to={`/databases/${db.id}/migrations/batches`} className="text-sm text-slate-500 hover:underline">← Riwayat batch</Link>
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 break-words text-lg font-semibold">
-          <span className="font-mono text-slate-400">{b.id.slice(0, 8)}</span> Batch <BatchStatusBadge status={b.status} />
-        </h2>
-        {editable && !terminal && (
-          <Button variant="danger" onClick={() => setConfirm(true)} disabled={b.cancel_requested}>
-            {b.cancel_requested ? "Pembatalan diminta…" : "Batalkan"}
-          </Button>
-        )}
-        {editable && terminal && (b.failed > 0 || b.processed < b.total) && (
-          <Button onClick={doRetry} disabled={retry.isPending}>Ulangi item tersisa</Button>
-        )}
-      </div>
+      <BackLink to={`/databases/${db.id}/migrations/batches`}>Riwayat batch</BackLink>
 
-      <ErrorBox message={generalError(cancel.error, []) || generalError(retry.error, [])} />
-
-      <dl className="grid gap-3 text-sm sm:grid-cols-4">
-        {([
-          ["Dibuat oleh", `${b.created_by_name ?? b.created_by} · ${fmtDate(b.created_at)}`],
-          ["Mulai", b.started_at ? fmtDate(b.started_at) : "—"],
-          ["Selesai", b.finished_at ? fmtDate(b.finished_at) : "—"],
-          ["Dibatalkan oleh", b.cancelled_by_name ?? b.cancelled_by ?? "—"],
-        ] as [string, string][]).map(([k, v]) => (
-          <div key={k}><dt className="text-xs uppercase tracking-wide text-slate-500">{k}</dt><dd>{v}</dd></div>
-        ))}
-      </dl>
-
-      <div>
-        <div className="mb-1 flex justify-between text-sm">
-          <span>{b.processed} dari {b.total} selesai{b.failed > 0 ? `, ${b.failed} gagal` : ""}</span>
-          <span className="text-slate-500">{pct}%</span>
+      <section className={`space-y-5 rounded-2xl border border-t-4 bg-white p-6 shadow-sm ${
+        b.status === "failed" ? "border-t-danger" : b.status === "success" ? "border-t-ok" : b.status === "partial" || b.status === "cancelled" ? "border-t-warn" : "border-t-primary"}`}>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 break-words text-xl font-semibold">
+            Batch <span className="font-mono text-base font-normal text-slate-500">{b.id.slice(0, 8)}</span>
+            <BatchStatusBadge status={b.status} />
+          </h2>
+          {editable && !terminal && (
+            <Button variant="danger" onClick={() => setConfirm(true)} disabled={b.cancel_requested}>
+              {b.cancel_requested ? "Pembatalan diminta…" : "Batalkan"}
+            </Button>
+          )}
+          {editable && terminal && (b.failed > 0 || b.processed < b.total) && (
+            <Button variant="primary" onClick={doRetry} disabled={retry.isPending}>Ulangi item tersisa</Button>
+          )}
         </div>
-        <div className="h-2 overflow-hidden rounded bg-slate-200">
-          <div className="h-full bg-slate-900 transition-all" style={{ width: `${pct}%` }} />
+
+        <ErrorBox message={generalError(cancel.error, []) || generalError(retry.error, [])} />
+
+        <div>
+          <div className="mb-1.5 flex justify-between gap-3 text-sm">
+            <span>{b.processed} dari {b.total} selesai{b.failed > 0 ? `, ${b.failed} gagal` : ""}</span>
+            <span className="text-slate-500">{pct}%</span>
+          </div>
+          <div role="progressbar" aria-label="Progres batch" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}
+            className="flex h-2.5 overflow-hidden rounded-full bg-slate-200">
+            <div className="h-full bg-primary transition-all" style={{ width: `${share(b.processed)}%` }} />
+            <div className="h-full bg-danger transition-all" style={{ width: `${share(b.failed)}%` }} />
+          </div>
         </div>
-      </div>
+
+        <dl className="grid gap-4 text-sm sm:grid-cols-2 lg:grid-cols-4">
+          {([
+            ["Dibuat oleh", `${b.created_by_name ?? b.created_by}, ${fmtDate(b.created_at)}`],
+            ["Mulai", b.started_at ? fmtDate(b.started_at) : "—"],
+            ["Selesai", b.finished_at ? fmtDate(b.finished_at) : "—"],
+            ["Dibatalkan oleh", b.cancelled_by_name ?? b.cancelled_by ?? "—"],
+          ] as [string, string][]).map(([k, v]) => (
+            <div key={k}><dt className="text-xs uppercase tracking-wide text-slate-500">{k}</dt><dd>{v}</dd></div>
+          ))}
+        </dl>
+      </section>
 
       {b.status === "failed" && b.error && (
-        <div role="alert" className="rounded border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+        <div role="alert" className="rounded-2xl bg-danger-soft p-4 text-sm text-danger">
           <p className="font-medium">Batch berhenti karena error.</p>
-          <pre className="mt-2 whitespace-pre-wrap font-mono text-xs">{b.error}</pre>
+          <pre className="mt-2 whitespace-pre-wrap break-words font-mono text-xs">{b.error}</pre>
         </div>
       )}
       {(b.status === "partial" || b.status === "cancelled") && (
-        <p className="rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+        <p className="rounded-2xl bg-warn-soft p-4 text-sm text-warn">
           {b.status === "cancelled" ? "Batch dibatalkan di batas item." : "Sebagian migration gagal."} Perubahan yang sudah di-commit tetap tersimpan; tidak ada rollback otomatis.
         </p>
       )}
 
       <section>
-        <h3 className="mb-2 text-sm font-medium">Item</h3>
+        <h3 className="mb-3 font-serif text-lg font-semibold">Item batch</h3>
         {items.isLoading && <Loading />}
         {items.error && <StateError error={items.error} onRetry={() => items.refetch()} />}
         {items.data && items.data.length > 0 && (
-          <Table columns={["#", "Migration", "Percobaan", "Status", "Eksekusi", "Durasi", "Error"]}>
-            {items.data.map((it) => (
-              <tr key={it.id}>
-                <td className={`${td} font-mono text-xs`}>{it.id}</td>
-                <td className={td}>
-                  <Link to={`/databases/${db.id}/migrations/${it.migration_id}`} className="font-medium underline-offset-2 hover:underline">
-                    {it.migration_name ?? it.migration_id.slice(0, 8)}
-                  </Link>
-                </td>
-                <td className={td}>{it.attempt}</td>
-                <td className={td}>{ITEM[it.status]}{it.compensation_status === "retained" && <span className="block text-xs text-slate-400">perubahan dipertahankan</span>}</td>
-                <td className={`${td} font-mono text-xs`}>{it.execution_id.slice(0, 8)}</td>
-                <td className={td}>{fmtDuration(it.duration_ms)}</td>
-                <td className={`${td} max-w-xs`}><span className="text-xs text-red-700">{it.error}</span></td>
-              </tr>
-            ))}
-          </Table>
+          <DataList label="Item batch" rows={items.data} columns={columns} rowKey={(it) => String(it.id)} />
         )}
       </section>
 
