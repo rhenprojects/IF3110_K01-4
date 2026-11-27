@@ -104,6 +104,8 @@ Setiap migration tetap tercatat di `migration_executions` dan `migration_jobs`. 
 
 ## 8. Checklist uji
 
+Matriks skenario yang lebih lengkap (48 skenario, termasuk kasus gagal, cancel/resume/revert, konkurensi, dan observability) ada di [`BATCH_SCENARIOS.md`](BATCH_SCENARIOS.md).
+
 Jalankan otomatis (butuh PostgreSQL untuk test):
 
 ```bash
