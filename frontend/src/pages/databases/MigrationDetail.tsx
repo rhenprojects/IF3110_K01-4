@@ -219,9 +219,9 @@ export default function MigrationDetail() {
                 Hentikan batch
               </Button>
             )}
-            {m.status === "partial" && !m.batch_cancel_requested && (
+            {m.status === "partial" && !m.batch_cancel_requested && !busy && (
               <Button variant="primary" onClick={() => resumeBatch.mutate(m.id)} disabled={resumeBatch.isPending}>
-                Lanjutkan dari checkpoint
+                Ajukan lanjutkan dari checkpoint
               </Button>
             )}
             {(m.status === "success" || m.status === "partial") && !m.batch_cancel_requested && (
