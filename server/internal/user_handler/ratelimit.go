@@ -50,7 +50,7 @@ func (l *loginLimiter) allow(key string) (bool, time.Duration) {
 	return true, 0
 }
 
-func (l *loginLimiter) fail(key string) {
+func (l *loginLimiter) fail(key string) int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := l.now()
@@ -67,6 +67,7 @@ func (l *loginLimiter) fail(key string) {
 	}
 	entry.failures++
 	l.entries[key] = entry
+	return entry.failures
 }
 
 func (l *loginLimiter) reset(key string) {

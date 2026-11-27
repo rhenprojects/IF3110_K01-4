@@ -6,6 +6,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"time"
 	"web_backend/internal/audit"
 	"web_backend/internal/authctx"
 	"web_backend/internal/httpx"
@@ -73,10 +74,6 @@ func (h *UserHandler) Login(c *fiber.Ctx) error {
 	username := strings.TrimSpace(req.Username)
 	limitKey := strings.ToLower(username) + "|" + clientIP(c)
 	ipKey := clientIP(c)
-	if allowed, retry := h.loginLimiter.allow(limitKey); !allowed {
-		c.Set(fiber.HeaderRetryAfter, strconv.Itoa(int(retry.Seconds())+1))
-		return httpx.Error(c, fiber.StatusTooManyRequests, "too many failed login attempts, try again later")
-	}
 	if allowed, retry := h.ipLimiter.allow(ipKey); !allowed {
 		c.Set(fiber.HeaderRetryAfter, strconv.Itoa(int(retry.Seconds())+1))
 		return httpx.Error(c, fiber.StatusTooManyRequests, "too many failed login attempts, try again later")
@@ -88,8 +85,13 @@ func (h *UserHandler) Login(c *fiber.Ctx) error {
 		return httpx.Error(c, fiber.StatusInternalServerError, "Internal server error")
 	}
 	if !CheckPassword(user.Password, req.Password) {
-		h.loginLimiter.fail(limitKey)
+		failures := h.loginLimiter.fail(limitKey)
 		h.ipLimiter.fail(ipKey)
+		delay := time.Duration(failures) * 250 * time.Millisecond
+		if delay > 2*time.Second {
+			delay = 2 * time.Second
+		}
+		time.Sleep(delay)
 		audit.Log(h.DB, "", "login_failed", "user", username, clientIP(c), "invalid credentials")
 		return httpx.Error(c, fiber.StatusUnauthorized, "Invalid username or password")
 	}

@@ -74,12 +74,15 @@ func main() {
 	if err != nil {
 		log.Fatalf("Gagal membuat cipher: %v", err)
 	}
+	env := strings.ToLower(strings.TrimSpace(os.Getenv("APP_ENV")))
+	production := env == "production" || env == "prod"
 	var connService *targetdb.Service
 	var eng *engine.Engine
 	if db != nil {
 		connService = targetdb.NewService(db, connCipher, targetdb.NewPoolManager())
 		eng, err = engine.New(db, connService, engine.Options{
-			StatementTimeout: time.Duration(envInt("MIGRATION_TIMEOUT_SECONDS", 300)) * time.Second,
+			StatementTimeout:    time.Duration(envInt("MIGRATION_TIMEOUT_SECONDS", 300)) * time.Second,
+			DenySuperuserTarget: production || os.Getenv("DENY_SUPERUSER_TARGET") == "true",
 		})
 		if err != nil {
 			log.Fatalf("Gagal membuat migration engine: %v", err)
@@ -112,8 +115,6 @@ func main() {
 		}()
 	}
 
-	env := strings.ToLower(strings.TrimSpace(os.Getenv("APP_ENV")))
-	production := env == "production" || env == "prod"
 	devAuth := os.Getenv("DEV_AUTH") == "true"
 	if devAuth {
 		if production {

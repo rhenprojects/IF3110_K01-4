@@ -116,6 +116,15 @@ func (e *Engine) execute(ctx context.Context, spec attemptSpec) (_ *models.Migra
 	if err != nil {
 		return fail(err, "connect")
 	}
+	if e.opts.DenySuperuserTarget {
+		var superuser bool
+		if err := pool.QueryRow(ctx, `SELECT rolsuper FROM pg_roles WHERE rolname = current_user`).Scan(&superuser); err != nil {
+			return fail(err, "policy")
+		}
+		if superuser {
+			return fail(errors.New("target database user is superuser; use a restricted role"), "policy")
+		}
+	}
 	if m.BatchSize > 0 {
 		res = e.executeChunked(ctx, spec, &m, pool)
 		return &m, res, nil

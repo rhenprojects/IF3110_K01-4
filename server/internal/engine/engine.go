@@ -23,14 +23,15 @@ type PoolProvider interface {
 }
 
 type Options struct {
-	MaxAttempts      int           // attempt maksimum per job, termasuk yang pertama
-	BackoffBase      time.Duration // jeda retry pertama, lalu berlipat dua
-	BackoffMax       time.Duration
-	PollEvery        time.Duration // interval worker memeriksa queue
-	HeartbeatEvery   time.Duration
-	StaleAfter       time.Duration // job running tanpa heartbeat selama ini dianggap terhenti
-	StatementTimeout time.Duration // batas eksekusi SQL migration di database target
-	Logger           *slog.Logger
+	MaxAttempts         int           // attempt maksimum per job, termasuk yang pertama
+	BackoffBase         time.Duration // jeda retry pertama, lalu berlipat dua
+	BackoffMax          time.Duration
+	PollEvery           time.Duration // interval worker memeriksa queue
+	HeartbeatEvery      time.Duration
+	StaleAfter          time.Duration // job running tanpa heartbeat selama ini dianggap terhenti
+	StatementTimeout    time.Duration // batas eksekusi SQL migration di database target
+	DenySuperuserTarget bool          // tolak eksekusi bila user target adalah superuser
+	Logger              *slog.Logger
 }
 
 func (o Options) withDefaults() Options {

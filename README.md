@@ -125,7 +125,9 @@ Buka http://localhost:5173. Permintaan `/api` diteruskan ke `localhost:9000` ole
 | `ADMIN_USERNAME`, `ADMIN_PASSWORD` | saat pertama kali | Membuat Platform Admin pertama jika belum ada admin sama sekali |
 | `DB_ENC_KEY` | disarankan | Key AES-256 (base64, 32 byte) untuk mengenkripsi password koneksi. Tanpa ini dipakai key acak, sehingga koneksi yang tersimpan tidak bisa dibuka lagi setelah restart |
 | `SESSION_HASH_KEY`, `SESSION_BLOCK_KEY` | disarankan | Key untuk menandatangani dan mengenkripsi cookie session (block key 16/24/32 byte). Tanpa ini dipakai key acak, sehingga semua user harus login ulang setelah restart |
-| `APP_ENV=production` atau `COOKIE_SECURE=true` | production | Mengaktifkan atribut `Secure` pada cookie (wajib untuk HTTPS) |
+| `APP_ENV=production` atau `COOKIE_SECURE=true` | production | Mengaktifkan `Secure` cookie, menolak `DEV_AUTH`, secret default, self-approval, dan target DB superuser |
+| `ALLOW_SELF_APPROVAL=true` | tidak | Override: izinkan leader menyetujui change request miliknya sendiri (default ditolak di production) |
+| `DENY_SUPERUSER_TARGET=true` | tidak | Tolak eksekusi migration bila user database target adalah superuser |
 | `PORT` | tidak | Port backend, default `9000` |
 | `WORKER_COUNT` | tidak | Jumlah worker migration, default `2` |
 | `MIGRATION_TIMEOUT_SECONDS` | tidak | Batas eksekusi satu migration di database target, default `300` detik |

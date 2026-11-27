@@ -33,13 +33,15 @@ var (
 	ErrStale               = errors.New("change request is no longer valid; submit a new one")
 	ErrDispatchFailed      = errors.New("approved but could not be queued")
 	ErrBatchRevert         = errors.New("batch migration must be cancelled/reverted via /batch/cancel")
+	ErrSelfApproval        = errors.New("cannot approve your own change request")
 )
 
 type EnqueueFunc func(ctx context.Context, cr models.ChangeRequest) (jobID string, err error)
 
 type Deps struct {
-	Enqueue  EnqueueFunc
-	Validate func(*models.Migration) error
+	Enqueue          EnqueueFunc
+	Validate         func(*models.Migration) error
+	DenySelfApproval bool
 }
 
 type Service struct {
@@ -184,6 +186,9 @@ func (s *Service) decide(ctx context.Context, userID, requestID string, decision
 		}
 		if !workflow.CanApprove(userID, groups) {
 			return ErrNotLeader
+		}
+		if s.deps.DenySelfApproval && cr.RequestedBy == userID {
+			return ErrSelfApproval
 		}
 
 		var prior models.Approval

@@ -478,6 +478,8 @@ Migration dengan `batch_size > 0` dieksekusi per potongan row oleh worker queue,
 
 Setiap perubahan (`up`, `rollback`, `forward`) diajukan sebagai change request dan harus disetujui leader dari **setiap group yang punya akses** ke database (`view` maupun `edit`). Setelah leader terakhir menyetujui, permintaan otomatis masuk queue dan `job_id` terisi. Satu leader yang memimpin beberapa group cukup menyetujui sekali. Satu migration hanya boleh punya satu change request yang sedang berjalan: menunggu review, sudah disetujui tetapi belum masuk queue, atau sudah masuk queue dengan job yang belum selesai.
 
+Di `APP_ENV=production`, leader **tidak boleh** menyetujui change request miliknya sendiri (respons `409`); set `ALLOW_SELF_APPROVAL=true` hanya bila kebijakan tim mengizinkan. Di production juga migration ditolak bila user database target adalah superuser.
+
 | Endpoint | Fungsi |
 |---|---|
 | `POST /databases/:id/migrations/:mid/change-requests` | Ajukan perubahan. Body `{ "kind": "up" \| "rollback" \| "forward" }`. Harus `edit`. Response `201` + `ChangeRequest` berstatus `pending_review` |

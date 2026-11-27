@@ -5,30 +5,24 @@ import (
 	"time"
 )
 
-func TestLoginLimiterBlocksAndResets(t *testing.T) {
+func TestLoginLimiterCountsAndExpires(t *testing.T) {
 	now := time.Unix(0, 0)
 	limiter := newLoginLimiter(2, time.Minute)
 	limiter.now = func() time.Time { return now }
 	key := "user|127.0.0.1"
 
-	if ok, _ := limiter.allow(key); !ok {
-		t.Fatal("login should be allowed before any failure")
+	if got := limiter.fail(key); got != 1 {
+		t.Fatalf("failures = %d, want 1", got)
 	}
-	limiter.fail(key)
-	limiter.fail(key)
-	if ok, _ := limiter.allow(key); ok {
-		t.Fatal("login should be blocked after max failures")
+	if got := limiter.fail(key); got != 2 {
+		t.Fatalf("failures = %d, want 2", got)
 	}
-
+	now = now.Add(61 * time.Second)
+	if got := limiter.fail(key); got != 1 {
+		t.Fatalf("failures after window = %d, want 1", got)
+	}
 	limiter.reset(key)
 	if ok, _ := limiter.allow(key); !ok {
-		t.Fatal("login should be allowed after reset")
-	}
-
-	limiter.fail(key)
-	limiter.fail(key)
-	now = now.Add(61 * time.Second)
-	if ok, _ := limiter.allow(key); !ok {
-		t.Fatal("login should be allowed after the window expires")
+		t.Fatal("allow should be true after reset")
 	}
 }

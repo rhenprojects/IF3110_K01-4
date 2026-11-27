@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"web_backend/internal/authctx"
@@ -51,7 +52,10 @@ func NewHandlerWithEngine(db *gorm.DB, svc *targetdb.Service, eng *engine.Engine
 	}
 	h := &Handler{db: db, svc: svc, engine: eng}
 	if db != nil && eng != nil {
-		h.review = review.New(db, review.Deps{Enqueue: reviewEnqueue(eng), Validate: engine.ValidateDefinition})
+		h.review = review.New(db, review.Deps{
+			Enqueue: reviewEnqueue(eng), Validate: engine.ValidateDefinition,
+			DenySelfApproval: strings.EqualFold(os.Getenv("APP_ENV"), "production") && os.Getenv("ALLOW_SELF_APPROVAL") != "true",
+		})
 	}
 	return h
 }
@@ -549,6 +553,8 @@ func (h *Handler) writeError(c *fiber.Ctx, err error) error {
 		return httpx.Error(c, fiber.StatusBadRequest, err.Error())
 	case errors.Is(err, review.ErrMigrationNotFound), errors.Is(err, review.ErrRequestNotFound):
 		return httpx.Error(c, fiber.StatusNotFound, err.Error())
+	case errors.Is(err, review.ErrSelfApproval):
+		return httpx.Error(c, fiber.StatusConflict, err.Error())
 	case errors.Is(err, review.ErrNotLeader), errors.Is(err, review.ErrEditAccessRequired):
 		return httpx.Error(c, fiber.StatusForbidden, err.Error())
 	case isReviewConflict(err):
