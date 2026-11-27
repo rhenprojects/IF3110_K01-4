@@ -139,6 +139,7 @@ npm run test:e2e  # Playwright; aplikasi harus berjalan di localhost:5173
 | `PORT` | tidak | Port backend, default `9000` |
 | `WORKER_COUNT` | tidak | Jumlah worker migration, default `2` |
 | `MIGRATION_TIMEOUT_SECONDS` | tidak | Batas eksekusi satu migration di database target, default `300` detik |
+| `OTEL_TRACES_EXPORTER=none` | tidak | Matikan exporter span ke stdout (default: span OpenTelemetry ditulis ke stdout sebagai JSON) |
 | `HTTP_READ_TIMEOUT_SECONDS`, `HTTP_WRITE_TIMEOUT_SECONDS`, `HTTP_IDLE_TIMEOUT_SECONDS` | tidak | Timeout HTTP, default `15`/`30`/`60` detik |
 | `HTTP_BODY_LIMIT_BYTES` | tidak | Batas body request, default `1048576` (1 MB) |
 | `DB_MAX_OPEN_CONNS`, `DB_MAX_IDLE_CONNS`, `DB_CONN_MAX_LIFETIME_MINUTES` | tidak | Batas pool database platform, default `20`/`10`/`30` menit |
@@ -223,6 +224,69 @@ Saat login backend membuat token CSRF per session dan mengirimnya lewat cookie `
 - **Forward** menjalankan ulang SQL up migration yang di-rollback atau gagal, mengikuti urutan linear, dan tidak otomatis menjalankan migration berikutnya.
 - SQL migration yang sudah dieksekusi tidak bisa diubah; perbaikan dibuat sebagai migration baru.
 - Halaman **Riwayat eksekusi** menampilkan semua attempt, termasuk yang gagal. **Hide rollback** menyembunyikan eksekusi yang dibatalkan beserta rollback suksesnya (dipasangkan lewat execution ID, bukan nama migration). Data riwayat tidak dihapus.
+
+### Queue, worker, dan lock
+
+- **Queue** adalah tabel `migration_jobs` di database platform, jadi job tetap ada setelah restart. API hanya membuat job lalu mengembalikan job ID. Worker (`WORKER_COUNT`, default 2) mengambil job dengan `SELECT ... FOR UPDATE SKIP LOCKED`, sehingga satu job tidak pernah diambil dua worker.
+- **Lock per database target**: session advisory lock PostgreSQL `pg_try_advisory_lock(hashtextextended('dbmp:<connection_id>', 0))` di database platform, dipegang lewat koneksi khusus milik worker selama job berjalan. Karena semua worker dan proses memakai database platform yang sama, lock berlaku lintas worker, proses, dan container. Database berbeda punya lock berbeda, jadi bisa berjalan paralel.
+- Worker yang tidak mendapat lock mengembalikan job ke queue **tanpa** memakan attempt. Job juga tidak diambil selama database yang sama masih punya job `running`/`uncertain` atau migration batch `partial`.
+- **Revalidation**: setelah lock didapat, sebelum SQL dijalankan, worker memeriksa ulang keadaan terkini: status migration masih `approved`, definisi SQL down/irreversible masih valid, target rollback masih migration aktif terakhir, dan urutan forward masih linear. Aturannya sama dengan saat review (`review.StillValid`). Jika tidak lagi sah, attempt dicatat gagal dengan `revalidation failed: ...` tanpa menjalankan SQL, tanpa retry, dan tanpa mengubah migration.
+- **Retry**: hanya error sementara (SQLSTATE `08xxx`, `40001`, `40P01`, `55P03`, `57P0x`, dan koneksi terputus), maksimal 3 attempt dengan jeda eksponensial 2 → 4 → … detik (maksimal 30 detik). Error SQL dari user (mis. `42P01`) dan timeout langsung `failed`.
+- **Ledger anti double commit**: setiap eksekusi menulis `execution_id` ke tabel `_dbmp.executions` di database target **dalam transaction yang sama** dengan SQL migration. Sebelum menjalankan SQL, worker memeriksa ledger; job duplikat dengan execution ID yang sudah ada dicatat sebagai sudah ter-commit dan tidak dijalankan lagi. Schema `_dbmp` inilah yang terlihat di viewer.
+
+**Pemulihan lock ketika worker gagal**
+
+1. Worker yang crash (proses mati atau koneksi putus) otomatis melepas lock: advisory lock terikat ke sesi database, dan PostgreSQL melepasnya begitu koneksi worker tertutup. Tidak ada lock menggantung dan tidak perlu TTL. Transaction migration yang belum di-commit juga otomatis di-rollback oleh PostgreSQL.
+2. Selama berjalan, worker memperbarui `heartbeat_at` setiap 5 detik. Reaper di setiap proses backend memeriksa job `running` tanpa heartbeat lebih dari 30 detik, serta job `uncertain`.
+3. Reaper mencoba mengambil lock database tersebut. Kalau lock masih dipegang, pemiliknya masih hidup dan job dibiarkan. Kalau lock didapat, reaper memeriksa ledger `_dbmp.executions` di database target:
+   - `execution_id` ada → commit sudah terjadi sebelum crash → job `success` (dicatat `recovered`).
+   - `execution_id` tidak ada → commit tidak terjadi → attempt dicatat gagal sementara, lalu job di-queue ulang dan diambil worker lain.
+   - Ledger tidak bisa dibaca (target tidak terjangkau) → job `uncertain`, dan migration berikutnya di database yang sama ditahan sampai hasilnya dapat dipastikan.
+4. Migration batch per potongan row tidak memakai ledger per execution. Checkpoint (`run`, potongan, cursor) ditulis dalam transaction yang sama dengan setiap potongan, sehingga job yang di-queue ulang melanjutkan dari potongan terakhir yang committed tanpa mengulang potongan sebelumnya.
+
+### Logging dan tracing
+
+Semua log adalah JSON satu baris lewat `log/slog` ke stdout. Log yang terjadi di dalam request atau job otomatis membawa `trace_id` dan `span_id`. Setiap eksekusi SQL dicatat, termasuk query read-only viewer (`sql.query`). Mulai, hasil, serta commit/rollback dicatat sebagai event terpisah (`sql.start`, `tx.commit`/`tx.rollback`, `sql.failed`, `job.finished`). Password di SQL disamarkan (`PASSWORD '***'`); session id dan kredensial database tidak pernah ditulis ke log.
+
+Trace OpenTelemetry (W3C Trace Context) menyambungkan API → queue → worker → lock → query. Trace context ikut disimpan di job (`migration_jobs.trace_parent`), sehingga span worker menjadi bagian dari trace request yang menyetujui migration. Span ditulis ke stdout oleh exporter console. Contoh di bawah diambil dari `sh scripts/invoker.sh test-api`.
+
+Contoh log satu job migration (trace `568b8b93…`, dari request approve leader terakhir sampai worker selesai):
+
+```json
+{"time":"2026-11-27T10:58:23.4705705+07:00","level":"INFO","msg":"job enqueued","component":"migration_engine","event":"job.enqueued","actor":"35d05785-720f-4982-b6b9-45d995c3e0c6","database":"c65e39c9-3a2c-406e-8830-8ffc2504de1e","status":"queued","job_id":"1d7e562f-8ca5-4158-97f2-dc24ca1858f4","execution_id":"86885212-53d2-4772-82e8-23b6564857de","migration_id":"f7da6a48-b737-4e74-af3a-8e0768a43c1b","kind":"up","trace_id":"568b8b938aac0b831d44a35d660aba03","span_id":"9ed1f7c1df8405ac"}
+{"time":"2026-11-27T10:58:23.4785009+07:00","level":"INFO","msg":"database lock acquired","component":"migration_engine","execution_id":"86885212-53d2-4772-82e8-23b6564857de","attempt":1,"migration_id":"f7da6a48-b737-4e74-af3a-8e0768a43c1b","database":"c65e39c9-3a2c-406e-8830-8ffc2504de1e","kind":"up","actor":"35d05785-720f-4982-b6b9-45d995c3e0c6","job_id":"1d7e562f-8ca5-4158-97f2-dc24ca1858f4","worker":"asus-55696-w2","event":"lock.acquired","trace_id":"568b8b938aac0b831d44a35d660aba03","span_id":"a100397bf7f0e9c1"}
+{"time":"2026-11-27T10:58:23.4930262+07:00","level":"INFO","msg":"migration SQL started","component":"migration_engine","execution_id":"86885212-53d2-4772-82e8-23b6564857de","attempt":1,"migration_id":"f7da6a48-b737-4e74-af3a-8e0768a43c1b","database":"c65e39c9-3a2c-406e-8830-8ffc2504de1e","kind":"up","actor":"35d05785-720f-4982-b6b9-45d995c3e0c6","job_id":"1d7e562f-8ca5-4158-97f2-dc24ca1858f4","event":"sql.start","query":"CREATE TABLE api_smoke_1108 (id serial PRIMARY KEY, note text); CREATE INDEX api_smoke_1108_note_idx ON api_smoke_1108 (note);","trace_id":"568b8b938aac0b831d44a35d660aba03","span_id":"7308fa74ff0a6e80"}
+{"time":"2026-11-27T10:58:23.522457+07:00","level":"INFO","msg":"transaction committed","component":"migration_engine","execution_id":"86885212-53d2-4772-82e8-23b6564857de","attempt":1,"migration_id":"f7da6a48-b737-4e74-af3a-8e0768a43c1b","database":"c65e39c9-3a2c-406e-8830-8ffc2504de1e","kind":"up","actor":"35d05785-720f-4982-b6b9-45d995c3e0c6","job_id":"1d7e562f-8ca5-4158-97f2-dc24ca1858f4","event":"tx.commit","status":"success","duration_ms":39,"trace_id":"568b8b938aac0b831d44a35d660aba03","span_id":"7308fa74ff0a6e80"}
+{"time":"2026-11-27T10:58:23.5436272+07:00","level":"INFO","msg":"job attempt finished","component":"migration_engine","execution_id":"86885212-53d2-4772-82e8-23b6564857de","attempt":1,"migration_id":"f7da6a48-b737-4e74-af3a-8e0768a43c1b","database":"c65e39c9-3a2c-406e-8830-8ffc2504de1e","kind":"up","actor":"35d05785-720f-4982-b6b9-45d995c3e0c6","job_id":"1d7e562f-8ca5-4158-97f2-dc24ca1858f4","worker":"asus-55696-w2","event":"job.finished","status":"success","execution_status":"success","duration_ms":39,"trace_id":"568b8b938aac0b831d44a35d660aba03","span_id":"a100397bf7f0e9c1"}
+```
+
+Contoh attempt gagal (SQL user salah, tidak di-retry) dan query read-only viewer:
+
+```json
+{"time":"2026-11-27T10:58:31.3728093+07:00","level":"WARN","msg":"migration attempt failed","component":"migration_engine","execution_id":"73dc2dad-9159-4aea-8ec6-a5e6f42bae89","attempt":1,"migration_id":"09570705-d91b-4bdb-b142-155b4a7e1686","database":"c65e39c9-3a2c-406e-8830-8ffc2504de1e","kind":"up","actor":"35d05785-720f-4982-b6b9-45d995c3e0c6","job_id":"6f2b7378-39e1-496f-acf8-160f2e2a807f","event":"sql.failed","phase":"execute","status":"failed","error":"ERROR: syntax error at or near \"THIS\" (SQLSTATE 42601)","sqlstate":"42601","transient":false,"duration_ms":17,"trace_id":"b4ea55575b6f1d5ae183aa14ddccd58a","span_id":"3bee7ef232a5e0af"}
+{"time":"2026-11-27T10:58:26.7256872+07:00","level":"INFO","msg":"viewer query executed","event":"sql.query","actor":"35d05785-720f-4982-b6b9-45d995c3e0c6","database":"c65e39c9-3a2c-406e-8830-8ffc2504de1e","operation":"rows","query":"SELECT \"id\", \"note\" FROM \"public\".\"api_smoke_1108\" ORDER BY \"id\" LIMIT $1 OFFSET $2","params":[50,0],"rows":0,"duration_ms":2,"status":"success","trace_id":"d15e56e5ae4d200b496ea06abf1dd4b5","span_id":"eee7d16894764389"}
+```
+
+Span dalam trace yang sama (`SpanKind`: 1 internal, 2 server, 3 client, 4 producer, 5 consumer):
+
+| Span | Span ID | Parent | Durasi |
+|---|---|---|---|
+| `POST /api/v1/databases/:id/change-requests/:rid/approve` | `9bbde374cd418e2e` | (root) | 85,4 ms |
+| `queue.enqueue` | `9ed1f7c1df8405ac` | `9bbde374cd418e2e` | 15,4 ms |
+| `job.process` | `a100397bf7f0e9c1` | `9ed1f7c1df8405ac` | 71,9 ms |
+| `lock.acquire` | `56600b710072f5f4` | `a100397bf7f0e9c1` | 3,9 ms |
+| `migration.execute` | `7308fa74ff0a6e80` | `a100397bf7f0e9c1` | 44,4 ms |
+| `db.query` | `4cf9b875b2adeb2b` | `7308fa74ff0a6e80` | 19,6 ms |
+| `db.commit` | `084977c8ae35a472` | `7308fa74ff0a6e80` | 3,4 ms |
+| `history.record` | `d0e679fe0f76f062` | `a100397bf7f0e9c1` | 20,7 ms |
+
+Contoh satu span mentah dari exporter console:
+
+```json
+{"Name":"db.query","SpanContext":{"TraceID":"568b8b938aac0b831d44a35d660aba03","SpanID":"4cf9b875b2adeb2b","TraceFlags":"01","TraceState":"","Remote":false},"Parent":{"TraceID":"568b8b938aac0b831d44a35d660aba03","SpanID":"7308fa74ff0a6e80","TraceFlags":"01","TraceState":"","Remote":false},"SpanKind":3,"StartTime":"2026-11-27T10:58:23.4964655+07:00","EndTime":"2026-11-27T10:58:23.5160516+07:00","Attributes":[{"Key":"db.system.name","Value":{"Type":"STRING","Value":"postgresql"}},{"Key":"db.query.text","Value":{"Type":"STRING","Value":"CREATE TABLE api_smoke_1108 (id serial PRIMARY KEY, note text); CREATE INDEX api_smoke_1108_note_idx ON api_smoke_1108 (note);"}}],"Status":{"Code":"Unset","Description":""}}
+```
+
+Query viewer menghasilkan span `viewer.read` dengan anak `db.query` per query. Error dan durasi tercatat di setiap span.
 
 ## Dokumentasi lain
 
