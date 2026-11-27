@@ -64,6 +64,8 @@ Uji negatif: setujui satu pengajuan lebih dulu dari tombol per baris, lalu gunak
 
 ## Bab 5 — Batch: jalan, cancel, resume, revert
 
+Detail langkah batch (termasuk skenario cancel yang bisa diamati) ada di [`BATCH_MANUAL_TESTING.md`](BATCH_MANUAL_TESTING.md).
+
 16. Migration baru `4-batch-demo`, **Batch size `1000`**.
     - SQL up (jeda 0,2 detik per potongan supaya tombol Hentikan sempat diklik):
       ```sql
