@@ -1,10 +1,22 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useCreateBatch, useMigrations } from "../../features/databases/hooks";
-import { Button, ConfirmDialog, EmptyState, ErrorBox, Loading, PageHeader, Table, generalError, td } from "../../components/ui";
+import { DataList, type Column } from "../../components/DataList";
+import { FilterChips } from "../../components/Filters";
+import { Button, ConfirmDialog, EmptyState, ErrorBox, Loading, PageHeader, generalError } from "../../components/ui";
 import { useToast } from "../../components/toast";
 import { fmtDate, fmtDuration } from "../../lib/format";
+import type { Migration, MigrationStatus } from "../../lib/types";
 import { StateError, StatusBadge, canEdit, useDb } from "./shared";
+
+type Filter = "all" | "draft" | "review" | "success" | "failed";
+const MATCH: Record<Filter, (s: MigrationStatus) => boolean> = {
+  all: () => true,
+  draft: (s) => s === "draft",
+  review: (s) => s === "pending_review" || s === "approved",
+  success: (s) => s === "success",
+  failed: (s) => s === "failed",
+};
 
 export default function MigrationList() {
   const db = useDb();
@@ -14,9 +26,12 @@ export default function MigrationList() {
   const batch = useCreateBatch(db.id);
   const [picked, setPicked] = useState<string[]>([]);
   const [confirm, setConfirm] = useState(false);
+  const [filter, setFilter] = useState<Filter>("all");
 
   const editable = canEdit(db.level);
-  const drafts = q.data?.filter((m) => m.status === "draft") ?? [];
+  const all = q.data ?? [];
+  const drafts = all.filter((m) => m.status === "draft");
+  const rows = all.filter((m) => MATCH[filter](m.status));
   const toggle = (id: string) =>
     setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
 
@@ -46,7 +61,30 @@ export default function MigrationList() {
     </div>
   ) : add;
 
-  const cols = ["Versi", "Nama", "Status", "Dibuat oleh", "Dijalankan", "Durasi", ...(editable ? ["Batch"] : [])];
+  const columns: Column<Migration>[] = [
+    { header: "Versi", cell: (m) => (m.version ? <span className="rounded-md bg-slate-100 px-2 py-0.5 font-mono text-xs">v{m.version}</span> : null) },
+    {
+      header: "Nama", role: "title",
+      cell: (m) => <Link to={`/databases/${db.id}/migrations/${m.id}`} className="text-primary underline-offset-2 hover:underline">{m.name}</Link>,
+    },
+    { header: "Status", role: "status", cell: (m) => <StatusBadge status={m.status} /> },
+    { header: "Dibuat oleh", cell: (m) => <>{m.created_by_name}<span className="block text-xs text-slate-500">{fmtDate(m.created_at)}</span></> },
+    {
+      header: "Dijalankan",
+      cell: (m) => (m.executed_at ? <>{m.executed_by_name}<span className="block text-xs text-slate-500">{fmtDate(m.executed_at)}</span></> : null),
+    },
+    { header: "Durasi", cell: (m) => fmtDuration(m.duration_ms) },
+    ...(editable ? [{
+      header: "Batch",
+      cell: (m: Migration) => m.status === "draft" ? (
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" className="size-4 accent-primary" checked={picked.includes(m.id)} onChange={() => toggle(m.id)} />
+          Pilih
+        </label>
+      ) : null,
+    }] : []),
+  ];
+
   return (
     <div>
       <PageHeader title="Riwayat migration" action={actions} />
@@ -54,20 +92,16 @@ export default function MigrationList() {
         Riwayat bersifat linear: nomor versi hanya diberikan pada migration yang berhasil di-commit, berurutan tanpa lompatan.
         {editable && drafts.length > 0 && " Pilih beberapa draft untuk dijalankan sekaligus dalam satu batch."}
       </p>
-      {q.data && q.data.length > 0 && (
-        <dl className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
-          {([
-            ["Total", q.data.length, "text-slate-900"],
-            ["Draft", drafts.length, "text-warn"],
-            ["Berhasil", q.data.filter((m) => m.status === "success").length, "text-ok"],
-            ["Gagal", q.data.filter((m) => m.status === "failed").length, "text-danger"],
-          ] as const).map(([label, n, tone]) => (
-            <div key={label} className="rounded-2xl border bg-white px-4 py-3 shadow-sm">
-              <dt className="text-xs uppercase tracking-wide text-slate-500">{label}</dt>
-              <dd className={`font-serif text-2xl font-semibold ${tone}`}>{n}</dd>
-            </div>
-          ))}
-        </dl>
+      {all.length > 0 && (
+        <div className="mb-4">
+          <FilterChips label="Filter status" value={filter} onChange={setFilter} options={[
+            { value: "all", label: "Semua", count: all.length },
+            { value: "draft", label: "Draft", count: all.filter((m) => MATCH.draft(m.status)).length },
+            { value: "review", label: "Review", count: all.filter((m) => MATCH.review(m.status)).length },
+            { value: "success", label: "Berhasil", count: all.filter((m) => MATCH.success(m.status)).length },
+            { value: "failed", label: "Gagal", count: all.filter((m) => MATCH.failed(m.status)).length },
+          ]} />
+        </div>
       )}
       <ErrorBox message={generalError(batch.error, [])} />
       {q.isLoading && <Loading />}
@@ -76,32 +110,8 @@ export default function MigrationList() {
         <EmptyState title="Belum ada migration"
           hint={editable ? "Buat migration pertama untuk mengubah struktur database ini." : "Belum ada perubahan yang tercatat."} action={add} />
       )}
-      {q.data && q.data.length > 0 && (
-        <Table columns={cols}>
-          {q.data.map((m) => (
-            <tr key={m.id}>
-              <td className={`${td} font-mono`}>{m.version ? <span className="rounded-md bg-slate-100 px-2 py-0.5 text-xs">v{m.version}</span> : "—"}</td>
-              <td className={td}><Link to={`/databases/${db.id}/migrations/${m.id}`} className="font-medium text-primary underline-offset-2 hover:underline">{m.name}</Link></td>
-              <td className={td}><StatusBadge status={m.status} /></td>
-              <td className={td}>{m.created_by_name}<span className="block text-xs text-slate-400">{fmtDate(m.created_at)}</span></td>
-              <td className={td}>
-                {m.executed_at ? <>{m.executed_by_name}<span className="block text-xs text-slate-400">{fmtDate(m.executed_at)}</span></> : "—"}
-              </td>
-              <td className={td}>{fmtDuration(m.duration_ms)}</td>
-              {editable && (
-                <td className={td}>
-                  {m.status === "draft" ? (
-                    <label className="flex items-center gap-2 text-sm">
-                      <input type="checkbox" className="size-4 accent-primary" checked={picked.includes(m.id)} onChange={() => toggle(m.id)} />
-                      Pilih
-                    </label>
-                  ) : "—"}
-                </td>
-              )}
-            </tr>
-          ))}
-        </Table>
-      )}
+      {all.length > 0 && rows.length === 0 && <EmptyState title="Tidak ada migration dengan status ini" />}
+      {rows.length > 0 && <DataList label="Riwayat migration" rows={rows} columns={columns} rowKey={(m) => m.id} />}
 
       {confirm && (
         <ConfirmDialog title="Jalankan batch" confirmLabel="Jalankan" busy={batch.isPending}

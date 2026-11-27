@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useRows, useSchema } from "../../features/databases/hooks";
-import { Badge, Button, EmptyState, Loading, Table, td } from "../../components/ui";
+import { Badge, Button, EmptyState, Loading, Table, selectCls, td, th } from "../../components/ui";
 import type { TableInfo } from "../../lib/types";
 import { StateError, useDb } from "./shared";
 
@@ -45,7 +45,7 @@ function Structure({ t }: { t: TableInfo }) {
 }
 
 function Cell({ v }: { v: unknown }) {
-  if (v === null || v === undefined) return <span className="italic text-slate-400">NULL</span>;
+  if (v === null || v === undefined) return <span className="italic text-slate-500">NULL</span>;
   const s = typeof v === "object" ? JSON.stringify(v) : String(v);
   return <span className="block max-w-xs truncate" title={s}>{s}</span>;
 }
@@ -67,8 +67,8 @@ function DataGrid({ dbId, schema, table }: { dbId: string; schema: string; table
           <thead className="sticky top-0 bg-slate-50">
             <tr>
               {d.columns.map((c) => (
-                <th key={c.name} className="whitespace-nowrap px-3 py-2 text-left text-xs font-medium text-slate-700">
-                  {c.name} <span className="font-normal text-slate-400">{c.type}</span>
+                <th key={c.name} className={`${th} whitespace-nowrap`}>
+                  {c.name} <span className="font-normal normal-case text-slate-500">{c.type}</span>
                 </th>
               ))}
             </tr>
@@ -88,7 +88,7 @@ function DataGrid({ dbId, schema, table }: { dbId: string; schema: string; table
         <div className="flex items-center gap-2">
           <label className="flex items-center gap-1 text-slate-500">
             Per halaman
-            <select className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-slate-900" value={limit}
+            <select className={selectCls} value={limit}
               onChange={(e) => { setLimit(Number(e.target.value)); setOffset(0); }}>
               {[25, 50, 100, 200].map((n) => <option key={n}>{n}</option>)}
             </select>
@@ -121,7 +121,7 @@ export default function DatabaseViewer() {
       <aside aria-label="Schema" className="h-fit space-y-3 rounded-2xl border bg-white p-4 text-sm shadow-sm md:sticky md:top-20">
         {q.data.schemas.map((s) => (
           <details key={s.name} open>
-            <summary className="cursor-pointer font-serif font-semibold">{s.name} <span className="text-slate-400">({s.tables.length})</span></summary>
+            <summary className="cursor-pointer font-serif font-semibold">{s.name} <span className="text-slate-500">({s.tables.length})</span></summary>
             <ul className="mt-1 space-y-0.5 border-l pl-2">
               {s.tables.map((t) => {
                 const active = sel.schema === s.name && sel.table.name === t.name;
@@ -142,7 +142,7 @@ export default function DatabaseViewer() {
       <section className="min-w-0">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-xl font-semibold">
-            <span className="text-slate-400">{sel.schema}.</span>{sel.table.name}{" "}
+            <span className="text-slate-500">{sel.schema}.</span>{sel.table.name}{" "}
             <Badge>{sel.table.type}</Badge>
           </h2>
           <div role="tablist" className="flex gap-1 rounded-full bg-slate-100 p-1">

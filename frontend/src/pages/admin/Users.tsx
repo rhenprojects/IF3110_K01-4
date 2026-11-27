@@ -1,8 +1,9 @@
 import { useState, type FormEvent } from "react";
 import { useAuth } from "../../features/auth/auth";
 import { useCreateUser, useDeleteUser, useUpdateUser, useUsers } from "../../features/admin/hooks";
+import { DataList, type Column } from "../../components/DataList";
 import {
-  Badge, Button, ConfirmDialog, ErrorBox, Field, Loading, Modal, PageHeader, Table, fieldError, generalError, inputCls, td,
+  Badge, Button, ConfirmDialog, ErrorBox, Field, Loading, Modal, PageHeader, fieldError, generalError, inputCls,
 } from "../../components/ui";
 import { useToast } from "../../components/toast";
 import { errorMessage } from "../../lib/errors";
@@ -36,7 +37,7 @@ function UserForm({ user, onClose }: { user?: User; onClose: () => void }) {
 
   return (
     <Modal title={user ? `Edit ${user.username}` : "Tambah user"} onClose={onClose}>
-      <form onSubmit={submit} className="space-y-3">
+      <form onSubmit={submit} className="space-y-4">
         <ErrorBox message={generalError(m.error, FIELDS)} />
         {!user && (
           <Field label="Username" error={fieldError(m.error, "username")} hint="3-50 karakter: huruf, angka, _ . -">
@@ -51,13 +52,16 @@ function UserForm({ user, onClose }: { user?: User; onClose: () => void }) {
           <input type="password" className={inputCls} value={password} autoComplete="new-password"
             onChange={(e) => setPassword(e.target.value)} required={!user} />
         </Field>
-        <div>
-          <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={isAdmin} disabled={isSelf} onChange={(e) => setIsAdmin(e.target.checked)} /> Platform Admin
+        <div className="rounded-xl bg-slate-100 p-3">
+          <label className="flex items-center gap-2 text-sm font-medium">
+            <input type="checkbox" className="size-4 accent-primary" checked={isAdmin} disabled={isSelf} onChange={(e) => setIsAdmin(e.target.checked)} />
+            Platform Admin
           </label>
-          {isSelf && <p className="mt-1 text-xs text-slate-500">Status admin diri sendiri tidak bisa dicabut.</p>}
+          <p className="mt-1 text-xs text-slate-500">
+            {isSelf ? "Status admin diri sendiri tidak bisa dicabut." : "Admin mengelola user, group, dan koneksi. Akses ke isi database tetap lewat group."}
+          </p>
         </div>
-        <div className="flex justify-end gap-2 pt-2">
+        <div className="flex flex-wrap justify-end gap-2 pt-2">
           <Button onClick={onClose}>Batal</Button>
           <Button type="submit" variant="primary" disabled={m.isPending}>Simpan</Button>
         </div>
@@ -86,27 +90,34 @@ export default function Users() {
     }
   }
 
+  const columns: Column<User>[] = [
+    {
+      header: "Nama", role: "title",
+      cell: (u) => <>{u.name}{u.id === me?.id && <span className="ml-2 text-xs font-normal text-slate-500">(kamu)</span>}</>,
+    },
+    { header: "Username", cell: (u) => <span className="font-mono text-sm">{u.username}</span> },
+    { header: "Role", role: "status", cell: (u) => <Badge tone={u.is_admin ? "dark" : "neutral"}>{u.is_admin ? "Admin" : "User"}</Badge> },
+    {
+      header: "", role: "actions",
+      cell: (u) => (
+        <>
+          <Button onClick={() => setForm(u)}>Edit</Button>
+          <Button variant="danger" onClick={() => setToDelete(u)} disabled={u.id === me?.id}>Hapus</Button>
+        </>
+      ),
+    },
+  ];
+
   return (
     <div>
       <PageHeader title="Users" action={<Button variant="primary" onClick={() => setForm("new")}>Tambah user</Button>} />
+      <p className="mb-4 max-w-3xl text-sm text-slate-500">
+        Akun yang bisa masuk ke platform. Platform Admin tidak otomatis punya akses ke isi database; aksesnya ditentukan lewat group.
+      </p>
       <div className="mb-3"><ErrorBox message={generalError(del.error, [])} /></div>
       {users.isLoading && <Loading />}
       {users.error && <ErrorBox message={errorMessage(users.error)} />}
-      {users.data && (
-        <Table columns={["Username", "Nama", "Role", ""]}>
-          {users.data.map((u) => (
-            <tr key={u.id}>
-              <td className={td}>{u.username}{u.id === me?.id && <span className="ml-2 text-xs text-slate-400">(kamu)</span>}</td>
-              <td className={td}>{u.name}</td>
-              <td className={td}>{u.is_admin ? <Badge tone="dark">Admin</Badge> : "User"}</td>
-              <td className={`${td} text-right`}>
-                <Button onClick={() => setForm(u)}>Edit</Button>{" "}
-                <Button variant="danger" onClick={() => setToDelete(u)} disabled={u.id === me?.id}>Hapus</Button>
-              </td>
-            </tr>
-          ))}
-        </Table>
-      )}
+      {users.data && <DataList label="Daftar user" rows={users.data} columns={columns} rowKey={(u) => u.id} />}
       {form && <UserForm user={form === "new" ? undefined : form} onClose={() => setForm(null)} />}
       {toDelete && (
         <ConfirmDialog title="Hapus user" message={`Hapus user "${toDelete.username}"? Sesi user ini juga akan dicabut.`}

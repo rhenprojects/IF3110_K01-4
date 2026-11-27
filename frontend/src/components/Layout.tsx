@@ -1,5 +1,6 @@
 import { Link, NavLink, Outlet, Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "../features/auth/auth";
+import { Button } from "./ui";
 
 //[guard] redirect ke /login jika belum login
 export function RequireAuth() {
@@ -37,7 +38,7 @@ export function AppLayout() {
             {user?.name.charAt(0).toUpperCase()}
           </span>
           <span className="max-w-28 truncate font-medium sm:max-w-none">{user?.name}</span>
-          <button onClick={() => logout()} className="rounded-lg border border-slate-300 bg-white px-3.5 py-1.5 font-medium hover:bg-slate-100">Keluar</button>
+          <Button onClick={() => logout()}>Keluar</Button>
         </div>
       </header>
       <main className="mx-auto w-full min-w-0 max-w-6xl flex-1 p-4 sm:px-8 sm:py-8"><Outlet /></main>

@@ -4,6 +4,8 @@ import { errorMessage } from "../lib/errors";
 
 export const inputCls = "mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-2 focus:outline-primary";
 
+export const selectCls = "rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-sm focus:outline-2 focus:outline-primary";
+
 //[error] pesan error field tertentu dari backend (400 + field)
 export const fieldError = (e: unknown, field: string) =>
   e instanceof ApiError && e.field === field ? e.message : undefined;
@@ -126,7 +128,7 @@ export function EmptyState({ title, hint, action }: { title: string; hint?: stri
 
 export const Loading = () => <p className="text-slate-500">Memuat…</p>;
 
-const th = "px-3 py-2 text-left text-xs font-medium uppercase tracking-wide text-slate-500";
+export const th = "px-3 py-2 text-left text-xs font-medium uppercase tracking-wide text-slate-500";
 export const td = "px-3 py-2 text-sm";
 
 //[table] columns = label header, pakai "" untuk kolom aksi; isi tbody lewat children

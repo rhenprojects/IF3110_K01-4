@@ -2,8 +2,9 @@ import { useState, type FormEvent } from "react";
 import {
   useConnections, useCreateConnection, useDeleteConnection, useTestConnection, useUpdateConnection,
 } from "../../features/admin/hooks";
+import { DataList, type Column } from "../../components/DataList";
 import {
-  Button, ConfirmDialog, EmptyState, ErrorBox, Field, Loading, Modal, PageHeader, Table, fieldError, generalError, inputCls, td,
+  Badge, Button, ConfirmDialog, EmptyState, ErrorBox, Field, Loading, Modal, PageHeader, fieldError, generalError, inputCls,
 } from "../../components/ui";
 import { useToast } from "../../components/toast";
 import { errorMessage } from "../../lib/errors";
@@ -46,15 +47,15 @@ function ConnectionForm({ conn, onClose }: { conn?: Connection; onClose: () => v
   const err = (k: string) => fieldError(m.error, k);
   return (
     <Modal title={conn ? `Edit ${conn.name}` : "Tambah koneksi database"} onClose={onClose}>
-      <form onSubmit={submit} className="space-y-3">
+      <form onSubmit={submit} className="space-y-4">
         <ErrorBox message={generalError(m.error, FIELDS)} />
         <Field label="Nama" error={err("name")}><input className={inputCls} value={f.name} onChange={set("name")} required /></Field>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <div className="sm:col-span-2"><Field label="Host" error={err("host")}><input className={inputCls} value={f.host} onChange={set("host")} required /></Field></div>
           <Field label="Port" error={err("port")}><input type="number" className={inputCls} value={f.port} onChange={set("port")} /></Field>
         </div>
         <Field label="Nama database" error={err("db_name")}><input className={inputCls} value={f.db_name} onChange={set("db_name")} required /></Field>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field label="Username" error={err("username")}><input className={inputCls} value={f.username} onChange={set("username")} required /></Field>
           <Field label="Password" error={err("password")} hint={conn ? "Kosongkan jika tidak diubah" : undefined}>
             <input type="password" className={inputCls} value={f.password} onChange={set("password")} autoComplete="new-password" required={!conn} />
@@ -70,8 +71,8 @@ function ConnectionForm({ conn, onClose }: { conn?: Connection; onClose: () => v
           </Field>
         )}
         <div aria-live="polite" className="text-sm">
-          {test.data && <p className="rounded bg-green-50 px-3 py-2 text-green-700">Terhubung: {test.data.server_version}</p>}
-          {test.error && <p className="rounded bg-red-50 px-3 py-2 text-red-700">Gagal: {(test.error as Error).message}</p>}
+          {test.data && <p className="rounded-xl bg-ok-soft px-3 py-2 text-ok">Terhubung: {test.data.server_version}</p>}
+          {test.error && <p className="rounded-xl bg-danger-soft px-3 py-2 text-danger">Gagal: {(test.error as Error).message}</p>}
         </div>
         <div className="flex flex-wrap justify-between gap-2 pt-2">
           <Button onClick={() => test.mutate({ id: conn?.id, input: input() })} disabled={test.isPending}>
@@ -106,10 +107,30 @@ export default function Connections() {
     }
   }
 
+  const columns: Column<Connection>[] = [
+    { header: "Nama", role: "title", cell: (c) => c.name },
+    { header: "SSL", role: "status", cell: (c) => <Badge>{c.ssl_mode}</Badge> },
+    { header: "Host", cell: (c) => <span className="font-mono text-sm">{c.host}:{c.port}</span> },
+    { header: "Database", cell: (c) => <span className="font-mono text-sm">{c.db_name}</span> },
+    { header: "User", cell: (c) => c.username },
+    {
+      header: "", role: "actions",
+      cell: (c) => (
+        <>
+          <Button onClick={() => setForm(c)}>Edit</Button>
+          <Button variant="danger" onClick={() => setToDelete(c)}>Hapus</Button>
+        </>
+      ),
+    },
+  ];
+
   const add = <Button variant="primary" onClick={() => setForm("new")}>Tambah koneksi</Button>;
   return (
     <div>
       <PageHeader title="Koneksi Database" action={add} />
+      <p className="mb-4 max-w-3xl text-sm text-slate-500">
+        Koneksi ke database PostgreSQL yang dikelola platform. Group mendapat akses ke koneksi ini lewat halaman Groups.
+      </p>
       <div className="mb-3"><ErrorBox message={generalError(del.error, [])} /></div>
       {conns.isLoading && <Loading />}
       {conns.error && <ErrorBox message={errorMessage(conns.error)} />}
@@ -117,21 +138,7 @@ export default function Connections() {
         <EmptyState title="Belum ada koneksi" hint="Tambahkan koneksi ke database PostgreSQL yang ingin dikelola." action={add} />
       )}
       {conns.data && conns.data.length > 0 && (
-        <Table columns={["Nama", "Host", "Database", "User", "SSL", ""]}>
-          {conns.data.map((c) => (
-            <tr key={c.id}>
-              <td className={td}>{c.name}</td>
-              <td className={td}>{c.host}:{c.port}</td>
-              <td className={td}>{c.db_name}</td>
-              <td className={td}>{c.username}</td>
-              <td className={td}>{c.ssl_mode}</td>
-              <td className={`${td} whitespace-nowrap text-right`}>
-                <Button onClick={() => setForm(c)}>Edit</Button>{" "}
-                <Button variant="danger" onClick={() => setToDelete(c)}>Hapus</Button>
-              </td>
-            </tr>
-          ))}
-        </Table>
+        <DataList label="Daftar koneksi database" rows={conns.data} columns={columns} rowKey={(c) => c.id} />
       )}
       {form && <ConnectionForm conn={form === "new" ? undefined : form} onClose={() => setForm(null)} />}
       {toDelete && (

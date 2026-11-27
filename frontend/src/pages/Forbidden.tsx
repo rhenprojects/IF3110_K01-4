@@ -1,10 +1,6 @@
+import { EmptyState } from "../components/ui";
+import { BackLink } from "./databases/shared";
+
 export default function Forbidden() {
-  return (
-    <div className="grid min-h-[50vh] place-items-center text-center">
-      <div>
-        <h1 className="text-2xl font-semibold">403</h1>
-        <p className="text-slate-500">Kamu tidak punya akses ke halaman ini.</p>
-      </div>
-    </div>
-  );
+  return <EmptyState title="403 · Akses ditolak" hint="Kamu tidak punya akses ke halaman ini." action={<BackLink to="/databases">Kembali ke daftar database</BackLink>} />;
 }

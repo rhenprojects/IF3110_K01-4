@@ -1,14 +1,15 @@
 import { useEffect, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   useChangeRequests, useDispatchChangeRequest, useJob, useJobs, useMigration, useMigrationExecutions, useSubmitChangeRequest,
 } from "../../features/databases/hooks";
-import { Badge, Button, ConfirmDialog, ErrorBox, Loading, Table, generalError, td } from "../../components/ui";
+import { DataList, type Column } from "../../components/DataList";
+import { Badge, Button, ConfirmDialog, ErrorBox, Loading, generalError } from "../../components/ui";
 import { useToast } from "../../components/toast";
 import { fmtDate, fmtDuration, isDestructive } from "../../lib/format";
 import type { ChangeRequest, JobKind, MigrationExecution, MigrationJob } from "../../lib/types";
-import { JobStatusBadge, KIND_LABEL, StateError, StatusBadge, canEdit, useDb } from "./shared";
+import { BackLink, JobStatusBadge, KIND_LABEL, StateError, StatusBadge, canEdit, useDb } from "./shared";
 
 //[queue] status job terbaru migration ini; dipolling sampai success/failed
 function JobPanel({ job }: { job: MigrationJob }) {
@@ -40,6 +41,12 @@ function ReviewPanel({ cr, onDispatch, dispatching }: { cr: ChangeRequest; onDis
     approve: { tone: "green", label: "Setuju" },
     reject: { tone: "red", label: "Tolak" },
   } as const;
+  const columns: Column<ChangeRequest["reviewers"][number]>[] = [
+    { header: "Group", role: "title", cell: (r) => r.group_name ?? null },
+    { header: "Team Leader", cell: (r) => r.leader_name },
+    { header: "Keputusan", role: "status", cell: (r) => <Badge tone={decision[r.decision].tone}>{decision[r.decision].label}</Badge> },
+    { header: "Komentar", wide: true, cell: (r) => r.comment || null },
+  ];
   return (
     <section className="space-y-3 rounded-2xl border bg-white p-4 shadow-sm">
       <div className="flex flex-wrap items-center gap-3 text-sm">
@@ -49,16 +56,7 @@ function ReviewPanel({ cr, onDispatch, dispatching }: { cr: ChangeRequest; onDis
         {onDispatch && <Button onClick={onDispatch} disabled={dispatching}>Masukkan ke queue</Button>}
       </div>
       {onDispatch && <p className="text-sm text-slate-600">Sudah disetujui semua, tetapi belum masuk queue. Coba masukkan ke queue lagi.</p>}
-      <Table columns={["Group", "Team Leader", "Keputusan", "Komentar"]}>
-        {cr.reviewers.map((r, i) => (
-          <tr key={i} className="align-top">
-            <td className={td}>{r.group_name ?? "—"}</td>
-            <td className={td}>{r.leader_name ?? "—"}</td>
-            <td className={td}><Badge tone={decision[r.decision].tone}>{decision[r.decision].label}</Badge></td>
-            <td className={td}>{r.comment || "—"}</td>
-          </tr>
-        ))}
-      </Table>
+      <DataList label="Persetujuan review" rows={cr.reviewers} columns={columns} rowKey={(r) => r.group_id ?? r.leader_id ?? ""} />
     </section>
   );
 }
@@ -72,7 +70,7 @@ function Stepper({ step, failed }: { step: number; failed: boolean }) {
         const last = i === STEPS.length - 1;
         const bad = failed && last;
         const done = i < step || (last && i === step && !failed);
-        const tone = bad ? "bg-danger text-white" : done ? "bg-primary text-white" : i === step ? "bg-primary-soft text-primary ring-2 ring-primary" : "bg-slate-100 text-slate-400";
+        const tone = bad ? "bg-danger text-white" : done ? "bg-primary text-white" : i === step ? "bg-primary-soft text-primary ring-2 ring-primary" : "bg-slate-100 text-slate-500";
         return (
           <li key={label} aria-current={i === step ? "step" : undefined} className={`flex items-center ${last ? "" : "flex-1"}`}>
             <span className={`grid size-7 shrink-0 place-items-center rounded-full text-xs font-semibold ${tone}`}>{done ? "✓" : bad ? "!" : i + 1}</span>
@@ -87,21 +85,18 @@ function Stepper({ step, failed }: { step: number; failed: boolean }) {
 
 function ExecutionHistory({ items }: { items: MigrationExecution[] }) {
   if (items.length === 0) return null;
+  const columns: Column<MigrationExecution>[] = [
+    { header: "#", cell: (x) => <span className="font-mono">{x.attempt}</span> },
+    { header: "Jenis", role: "title", cell: (x) => <>{KIND_LABEL[x.kind]}{x.recovered && <span className="ml-1 text-xs font-normal text-slate-500">(dipulihkan)</span>}</> },
+    { header: "Status", role: "status", cell: (x) => <JobStatusBadge status={x.status} /> },
+    { header: "Waktu", nowrap: true, cell: (x) => fmtDate(x.started_at) },
+    { header: "Durasi", cell: (x) => fmtDuration(x.duration_ms) },
+    { header: "Error", wide: true, cell: (x) => x.error ? <span className="break-words font-mono text-xs text-danger">{x.sqlstate && `[${x.sqlstate}] `}{x.error}</span> : null },
+  ];
   return (
     <section>
       <h3 className="mb-2 font-serif text-base font-semibold">Riwayat attempt</h3>
-      <Table columns={["#", "Jenis", "Status", "Waktu", "Durasi", "Error"]}>
-        {items.map((x) => (
-          <tr key={x.id} className="align-top">
-            <td className={`${td} font-mono`}>{x.attempt}</td>
-            <td className={td}>{KIND_LABEL[x.kind]}{x.recovered && <span className="ml-1 text-xs text-slate-500">(dipulihkan)</span>}</td>
-            <td className={td}><JobStatusBadge status={x.status} /></td>
-            <td className={`${td} whitespace-nowrap`}>{fmtDate(x.started_at)}</td>
-            <td className={td}>{fmtDuration(x.duration_ms)}</td>
-            <td className={`${td} font-mono text-xs text-danger`}>{x.sqlstate && `[${x.sqlstate}] `}{x.error}</td>
-          </tr>
-        ))}
-      </Table>
+      <DataList label="Riwayat attempt" rows={items} columns={columns} rowKey={(x) => String(x.id)} />
     </section>
   );
 }
@@ -165,12 +160,12 @@ export default function MigrationDetail() {
 
   return (
     <div className="space-y-5">
-      <Link to={`/databases/${db.id}/migrations`} className="text-sm text-slate-500 hover:underline">← Riwayat migration</Link>
+      <BackLink to={`/databases/${db.id}/migrations`}>Riwayat migration</BackLink>
       <div className={`space-y-5 rounded-2xl border border-t-4 bg-white p-6 shadow-sm ${
         m.status === "failed" ? "border-t-danger" : m.status === "success" && !busy ? "border-t-ok" : busy ? "border-t-warn" : "border-t-primary"}`}>
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <h2 className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 break-words text-2xl font-semibold">
-            {m.version && <span className="font-mono text-lg text-slate-400">v{m.version}</span>}{m.name} <StatusBadge status={m.status} />
+          <h2 className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 break-words text-xl font-semibold">
+            {m.version && <span className="font-mono text-base font-normal text-slate-500">v{m.version}</span>}{m.name} <StatusBadge status={m.status} />
           </h2>
           {editable && !busy && (
             <div className="flex flex-wrap gap-2">

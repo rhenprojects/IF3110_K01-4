@@ -1,11 +1,11 @@
 import { useState, type FormEvent } from "react";
-import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { useMigration, useSaveMigration } from "../../features/databases/hooks";
-import { Button, ErrorBox, Field, Loading, fieldError, generalError, inputCls } from "../../components/ui";
+import { Button, EmptyState, ErrorBox, Field, Loading, PageHeader, fieldError, generalError, inputCls } from "../../components/ui";
 import { useToast } from "../../components/toast";
 import { isDestructive } from "../../lib/format";
 import type { DatabaseItem, MigrationInput } from "../../lib/types";
-import { StateError, canEdit, useDb } from "./shared";
+import { BackLink, StateError, canEdit, useDb } from "./shared";
 
 const FIELDS = ["name", "sql", "sql_down", "irreversible_reason"];
 
@@ -84,19 +84,19 @@ export default function MigrationEditor() {
   const { mid } = useParams();
   const prefill = (useLocation().state as Partial<MigrationInput> | null) ?? {};
   const q = useMigration(db.id, mid);
-  const back = <Link to={`/databases/${db.id}/migrations`} className="underline">← Riwayat migration</Link>;
+  const back = <BackLink to={`/databases/${db.id}/migrations`}>Riwayat migration</BackLink>;
 
   //[akses] hanya UX; backend tetap menjawab 403 untuk user View Only
   if (!canEdit(db.level))
-    return <p role="alert" className="text-sm text-slate-600">Kamu hanya punya akses View Only pada database ini, jadi tidak bisa membuat atau mengubah migration. {back}</p>;
+    return <EmptyState title="Akses View Only" hint="Kamu hanya punya akses View Only pada database ini, jadi tidak bisa membuat atau mengubah migration." action={back} />;
 
   return (
     <div>
-      <h2 className="mb-4 text-2xl font-semibold">{mid ? "Edit draft migration" : "Migration baru"}</h2>
+      <PageHeader title={mid ? "Edit draft migration" : "Migration baru"} />
       {mid && q.isLoading && <Loading />}
       {mid && q.error && <StateError error={q.error} onRetry={() => q.refetch()} />}
       {mid && q.data && q.data.status !== "draft" && (
-        <p role="alert" className="text-sm text-slate-600">Hanya migration berstatus draft yang bisa diedit. {back}</p>
+        <EmptyState title="Migration tidak bisa diedit" hint="Hanya migration berstatus draft yang bisa diedit." action={back} />
       )}
       {mid && q.data?.status === "draft" && <EditorForm db={db} mid={mid} initial={q.data} />}
       {!mid && <EditorForm db={db} initial={{ name: "", sql: "", ...prefill }} />}
