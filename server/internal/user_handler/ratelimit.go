@@ -7,7 +7,7 @@ import (
 
 const (
 	defaultLoginMaxFailures   = 5
-	defaultLoginIPMaxFailures = 30
+	defaultLoginIPMaxFailures = 100
 	defaultLoginWindow        = 15 * time.Minute
 	loginLimiterMaxEntries    = 10000
 )

@@ -60,7 +60,9 @@ docker compose -f deploy/docker-compose.yml up --build
 |---|---|
 | Aplikasi (frontend) | http://localhost (juga http://localhost:5173) |
 | Backend API | http://localhost:9000/api/v1 |
-| PostgreSQL platform | `localhost:5433`, user `postgres`, password `postgres` (port 5433 agar tidak bentrok dengan PostgreSQL lokal) |
+| PostgreSQL platform | `localhost:5432`, user `postgres`, password `postgres` |
+
+Semua port compose di-bind ke `127.0.0.1` (hanya bisa diakses dari mesin ini). Untuk demo dari perangkat lain, ubah binding di `deploy/docker-compose.yml` atau gunakan SSH tunnel; jangan buka port database/Grafana/Prometheus ke publik.
 
 Login awal: **`admin` / `admin-password`** (Platform Admin).
 

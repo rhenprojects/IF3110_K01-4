@@ -157,6 +157,7 @@ func main() {
 	sessionService.SecureCookies = secureCookies
 
 	app := fiber.New(fiber.Config{
+		ProxyHeader:  "X-Real-IP",
 		BodyLimit:    envInt("HTTP_BODY_LIMIT_BYTES", 1<<20),
 		ReadTimeout:  time.Duration(envInt("HTTP_READ_TIMEOUT_SECONDS", 15)) * time.Second,
 		WriteTimeout: time.Duration(envInt("HTTP_WRITE_TIMEOUT_SECONDS", 30)) * time.Second,
