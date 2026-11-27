@@ -27,6 +27,7 @@ type attemptSpec struct {
 	connectionID string
 	migrationID  string
 	kind         models.JobKind
+	rollbackOf   *string
 	executedBy   string
 }
 
@@ -40,6 +41,7 @@ type attemptResult struct {
 	transient bool
 	uncertain bool // commit gagal dan bukti eksekusi tidak bisa diperiksa
 	recovered bool // hasil dipastikan lewat ledger, bukan dari eksekusi attempt ini
+	rejected  bool // ditolak revalidation; SQL tidak dijalankan dan migration tidak diubah
 
 	batchStatus string
 	batchCursor int64
@@ -112,6 +114,21 @@ func (e *Engine) execute(ctx context.Context, spec attemptSpec) (_ *models.Migra
 			"duration_ms", res.durationMs())
 		return &m, res, nil
 	}
+	// revalidate menolak attempt yang tidak lagi sah tanpa menjalankan SQL; tidak di-retry.
+	revalidate := func() bool {
+		err := e.revalidate(ctx, spec, &m)
+		if err == nil {
+			return true
+		}
+		res.finished = e.now()
+		res.status = models.ExecutionFailed
+		res.errMsg = "revalidation failed: " + err.Error()
+		res.rejected = true
+		span.SetAttributes(attribute.String("execution.phase", "revalidate"))
+		logger.WarnContext(ctx, "migration rejected by revalidation", "event", "job.revalidation_failed",
+			"status", res.status, "error", res.errMsg)
+		return false
+	}
 
 	pool, err := e.pools.Pool(ctx, spec.connectionID)
 	if err != nil {
@@ -125,6 +142,10 @@ func (e *Engine) execute(ctx context.Context, spec attemptSpec) (_ *models.Migra
 		if superuser {
 			return fail(errors.New("target database user is superuser; use a restricted role"), "policy")
 		}
+	}
+	// Batch tidak memakai ledger per execution: checkpoint-nya sendiri yang mencegah potongan dijalankan dua kali.
+	if m.BatchSize > 0 && !revalidate() {
+		return &m, res, nil
 	}
 	if m.BatchSize > 0 && spec.kind == models.JobKindRevert {
 		if m.BatchRunID == nil {
@@ -147,6 +168,10 @@ func (e *Engine) execute(ctx context.Context, spec attemptSpec) (_ *models.Migra
 	if committed {
 		res.status, res.finished, res.recovered = models.ExecutionSuccess, e.now(), true
 		logger.InfoContext(ctx, "execution already committed", "event", "sql.already_committed", "status", res.status)
+		return &m, res, nil
+	}
+	// Revalidation sesudah cek ledger: job duplikat yang sudah ter-commit tetap dikenali sebagai sukses.
+	if !revalidate() {
 		return &m, res, nil
 	}
 
@@ -209,6 +234,12 @@ func (e *Engine) execute(ctx context.Context, spec attemptSpec) (_ *models.Migra
 // applyToMigration memperbarui baris migration sesuai hasil akhir eksekusi up atau forward, lalu mengembalikan versi migration untuk dicatat di riwayat.
 // Forward yang gagal dan rollback tidak mengubah baris migration.
 func (e *Engine) applyToMigration(tx *gorm.DB, m *models.Migration, kind models.JobKind, actor string, res attemptResult, final bool) (*int, error) {
+	if res.rejected {
+		if m == nil {
+			return nil, nil
+		}
+		return m.Version, nil
+	}
 	if m != nil && m.BatchSize > 0 && res.batchStatus != "" {
 		if res.keepPartial {
 			version := m.Version
@@ -346,6 +377,7 @@ func specForJob(job *models.MigrationJob) attemptSpec {
 		connectionID: job.ConnectionID,
 		migrationID:  job.MigrationID,
 		kind:         job.Kind,
+		rollbackOf:   job.RollbackOf,
 		executedBy:   job.RequestedBy,
 	}
 }

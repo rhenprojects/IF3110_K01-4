@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 	"web_backend/internal/models"
@@ -32,6 +33,9 @@ type Options struct {
 	StatementTimeout    time.Duration // batas eksekusi SQL migration di database target
 	DenySuperuserTarget bool          // tolak eksekusi bila user target adalah superuser
 	Logger              *slog.Logger
+	// Revalidate dipanggil worker setelah lock didapat, sebelum SQL dijalankan, untuk aturan yang bergantung
+	// pada riwayat (mis. rollback hanya untuk migration aktif terakhir). Boleh nil.
+	Revalidate func(tx *gorm.DB, job *models.MigrationJob) error
 }
 
 func (o Options) withDefaults() Options {
@@ -184,6 +188,45 @@ func (e *Engine) Enqueue(ctx context.Context, req EnqueueRequest) (job *models.M
 		"migration_id", job.MigrationID, "kind", job.Kind)
 	e.Wake()
 	return job, nil
+}
+
+// revalidate memeriksa ulang, setelah lock didapat, bahwa job masih sah dijalankan terhadap keadaan terkini.
+func (e *Engine) revalidate(ctx context.Context, spec attemptSpec, m *models.Migration) error {
+	switch spec.kind {
+	case models.JobKindUp:
+		if m.Status != models.MigrationApproved && !(m.BatchSize > 0 && m.Status == models.MigrationPartial) {
+			return fmt.Errorf("%w: migration status is %s", ErrNotExecutable, m.Status)
+		}
+		if err := ValidateDefinition(m); err != nil {
+			return err
+		}
+	case models.JobKindRollback:
+		if m.Irreversible {
+			return ErrIrreversible
+		}
+		rollbackOf := ""
+		if spec.rollbackOf != nil {
+			rollbackOf = *spec.rollbackOf
+		}
+		if err := e.checkRollbackTarget(ctx, m.ID, rollbackOf); err != nil {
+			return err
+		}
+	case models.JobKindForward:
+		if m.Status != models.MigrationSuccess && m.Status != models.MigrationFailed {
+			return fmt.Errorf("%w: migration status is %s", ErrNotExecutable, m.Status)
+		}
+	case models.JobKindRevert:
+		if m.BatchSize <= 0 || m.BatchRunID == nil ||
+			(m.Status != models.MigrationSuccess && m.Status != models.MigrationPartial) {
+			return fmt.Errorf("%w: migration status is %s", ErrNotExecutable, m.Status)
+		}
+	}
+	if e.opts.Revalidate == nil {
+		return nil
+	}
+	return e.opts.Revalidate(e.db.WithContext(ctx), &models.MigrationJob{
+		ConnectionID: spec.connectionID, MigrationID: spec.migrationID, Kind: spec.kind, RollbackOf: spec.rollbackOf,
+	})
 }
 
 func (e *Engine) checkRollbackTarget(ctx context.Context, migrationID, executionID string) error {
